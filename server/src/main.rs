@@ -12,6 +12,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 mod action;
 mod analysis;
+mod client;
 mod completion;
 mod diagnosis;
 mod doc;
@@ -20,11 +21,13 @@ mod format;
 mod goto;
 mod hover;
 mod init;
-mod protocol;
+mod parser;
+mod reactor;
 mod server;
 mod symbol;
 mod tokenizer;
 mod utils;
+mod workspace;
 
 #[tokio::main]
 async fn main() {
@@ -46,13 +49,13 @@ async fn main() {
         // Don't display the event's target (module path)
         .with_target(false)
         // Log when entering and exiting spans
-        .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE)
+        .with_span_events(FmtSpan::ACTIVE)
         // log to a file
         .with_writer(non_blocking_writer)
         // Disabled ANSI color codes for better compatibility with some terminals
         .with_ansi(false)
         // TODO: log level control
-        .with_max_level(LevelFilter::WARN)
+        .with_max_level(LevelFilter::INFO)
         // Build the subscriber
         .finish();
 

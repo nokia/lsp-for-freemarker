@@ -1,0 +1,10 @@
+# identifier aligns with grammar.rs
+identifier = "boolean"
+category = "types"
+markdown = """
+# Boolean
+---
+> category: [The types](https://freemarker.apache.org/docs/dgui_datamodel_types.html)
+---
+To specify a boolean value you write true or false. Don't use quotation marks.
+"""

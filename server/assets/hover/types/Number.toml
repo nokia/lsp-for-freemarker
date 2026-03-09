@@ -1,0 +1,12 @@
+# identifier aligns with grammar.rs
+identifier = "number"
+category = "types"
+markdown = """
+# Number
+---
+> category: [The types](https://freemarker.apache.org/docs/dgui_datamodel_types.html)
+---
+Number: For example the price of a product. *Whole numbers and non-whole numbers are not distinguished; there is only a single number type. So for example 3/2 will be always 1.5, and never 1. Just like if you are using a calculator.*
+
+If you want to give a numerical value directly in the template, then you write for example: `150` or `-90.05` or `0.001`. (More details regarding the syntax can be found [later](https://freemarker.apache.org/docs/dgui_template_exp.html#dgui_template_exp_direct_number).)
+"""

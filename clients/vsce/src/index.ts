@@ -22,10 +22,15 @@ import { Executable, LanguageClient, LanguageClientOptions, ServerOptions, Trace
 import { bootstrap } from "./bootstrap";
 
 const extensionId = "lsp-for-freemarker";
-const extensionName = "Freemarker Language Server";
-const outputChannel = window.createOutputChannel(extensionName, { log: true });
+const language_server_name = "Freemarker Language Server";
+const outputChannel = window.createOutputChannel(extensionId, { log: true });
 
 const clients: Map<string, LanguageClient> = new Map();
+let binary_path: String | undefined = undefined;
+
+function window_log_message(msg: String) {
+    outputChannel.appendLine(`[${extensionId}]: ${msg}`);
+}
 
 function freemarker_file_pattern(folder: Uri) {
     return new RelativePattern(folder, "**/*.ftl");
@@ -44,16 +49,7 @@ async function start_client_for_folder(
     folder: WorkspaceFolder,
     ctx: ExtensionContext
 ) {
-    const binary_path = await bootstrap(ctx);
-    outputChannel.appendLine(`[TS] using server binary: ${binary_path}.`);
-
-    if (!binary_path) {
-        await window.showErrorMessage(
-            "Not starting Freemarker Language Server as a suitable binary was not found."
-        );
-        return;
-    }
-
+    window_log_message(`Prepare client for folder: ${folder.name}`);
     const root = folder.uri;
 
     const deleteWatcher = workspace.createFileSystemWatcher(
@@ -72,9 +68,12 @@ async function start_client_for_folder(
 
     ctx.subscriptions.push(deleteWatcher);
     ctx.subscriptions.push(createChangeWatcher);
+    // TODO: figure out if below 2 subscription are indeed useful
+    //ctx.subscriptions.push(createChangeWatcher.onDidCreate(open_document));
+    //ctx.subscriptions.push(createChangeWatcher.onDidChange(open_document));
 
     const server_exec: Executable = {
-        command: binary_path,
+        command: String(binary_path),
         options: {
             env: {
                 ...process.env
@@ -93,45 +92,29 @@ async function start_client_for_folder(
         ],
         synchronize: {
             fileEvents: [
+                createChangeWatcher,
                 deleteWatcher
             ]
         },
-        diagnosticCollectionName: extensionName,
+        initializationFailedHandler: (err) => {
+            window_log_message(`Failed to initialize language client: ${err}.`);
+            return true;
+        },
+        diagnosticCollectionName: extensionId,
         workspaceFolder: folder,
         outputChannel,
-        progressOnInitialization: true
     };
 
     const client = new LanguageClient(
         extensionId,
-        extensionName,
+        extensionId,
         server_opt,
         client_opt,
     );
 
-    ctx.subscriptions.push(createChangeWatcher.onDidCreate(open_document));
-    ctx.subscriptions.push(createChangeWatcher.onDidChange(open_document));
-    ctx.subscriptions.push(outputChannel.onDidChangeLogLevel((level: LogLevel) => {
-        outputChannel.appendLine(`[TS] onDidChangeLogLevel: ${level}.`);
-        switch (level) {
-            case LogLevel.Trace:
-            case LogLevel.Debug:
-                client.setTrace(Trace.Verbose);
-                break;
-            case LogLevel.Info:
-                client.setTrace(Trace.Messages);
-                break;
-            case LogLevel.Warning:
-            case LogLevel.Error:
-                client.setTrace(Trace.Compact);
-                break;
-            case LogLevel.Off:
-            default:
-                client.setTrace(Trace.Off);
-                break;
-        }
-    }));
+    window_log_message(`Starting client...`);
     await client.start();
+    window_log_message(`Client started.`);
 }
 
 function stop_client(client: LanguageClient) {
@@ -140,11 +123,11 @@ function stop_client(client: LanguageClient) {
 }
 
 async function stop_client_for_folder(workspaceFolder: string) {
+    window_log_message(`Stop client for folder: ${workspaceFolder}`);
     const client = clients.get(workspaceFolder);
     if (client) {
         await stop_client(client);
     }
-
     clients.delete(workspaceFolder);
 }
 
@@ -160,18 +143,24 @@ function update_clients(context: ExtensionContext) {
 }
 
 export async function activate(context: ExtensionContext): Promise<void> {
-    const now = new Date().toLocaleString();
-    console.log(`[${now}] activate ftl-lsp extension`);
-
-    const folders = workspace.workspaceFolders || [];
-
-    for (const folder of folders) {
-        await start_client_for_folder(folder, context);
+    window_log_message(`Extension activating...`);
+    binary_path = await bootstrap(context);
+    if (!binary_path) {
+        await window.showErrorMessage(
+            `Not starting ${language_server_name} as a suitable binary was not found.`
+        );
+        return;
     }
+    window_log_message(`Found ${language_server_name} binary: ${binary_path}`);
 
     context.subscriptions.push(
         workspace.onDidChangeWorkspaceFolders(update_clients(context))
     );
+
+    const folders = workspace.workspaceFolders || [];
+    for (const folder of folders) {
+        await start_client_for_folder(folder, context);
+    }
 
     commands.registerCommand("freemarker.restart", async () => {
         const currentFolder = workspace.workspaceFolders?.[0].uri.toString();
@@ -188,6 +177,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
             }
         }
     });
+    window_log_message(`Extension activatied.`);
 }
 
 export async function deactivate(): Promise<void> {

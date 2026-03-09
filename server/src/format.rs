@@ -8,27 +8,15 @@ use tower_lsp_server::{
         DocumentFormattingOptions, DocumentFormattingParams, OneOf, Position, Range, TextEdit,
     },
 };
-use tree_sitter::{Node, Point};
+use tree_sitter::Point;
 
-use crate::doc::TextDocument;
-use crate::protocol::Formatter;
+use crate::{reactor::Reactor, server::FormatFeature, window_log_info};
 
+#[derive(Clone, Copy)]
 struct FormatState {
     preset: Option<usize>,
     indent: usize,
     has_directive: bool,
-}
-
-fn get_first_node_of_line<'a>(root: &'a Node<'a>, col: usize, index: usize) -> Node<'a> {
-    let start = Point {
-        row: index,
-        column: col,
-    };
-    let end = Point {
-        row: index,
-        column: col + 2,
-    };
-    root.descendant_for_point_range(start, end).unwrap()
 }
 
 fn reset_state(mut state: FormatState) -> FormatState {
@@ -38,11 +26,22 @@ fn reset_state(mut state: FormatState) -> FormatState {
     state
 }
 
-fn update_state(root: &Node, index: usize, line: &str, mut state: FormatState) -> FormatState {
+fn update_state(
+    reactor: &Reactor,
+    index: usize,
+    line: &str,
+    mut state: FormatState,
+) -> FormatState {
     let trimed_line = line.trim_start();
     if trimed_line.starts_with("</#") || trimed_line.starts_with("<#") {
         let col = line.len() - trimed_line.len();
-        let node = get_first_node_of_line(root, col, index);
+        let node = reactor
+            .get_parser()
+            .get_node_at_point(Point {
+                row: index,
+                column: col,
+            })
+            .unwrap();
         if node.kind() == "comment" {
             // under comment section
             state.has_directive = false;
@@ -59,20 +58,20 @@ fn update_state(root: &Node, index: usize, line: &str, mut state: FormatState) -
                 node_cursor = parent;
             }
             // save the preset indentation for the top level directives
-            if state.indent == 0 {
-                if let Some(parent) = node.parent() {
-                    let _parentkind = parent.kind();
-                    let end_row = parent.end_position().row;
-                    let start_row = parent.start_position().row;
-                    if end_row > start_row {
-                        if state.preset.is_none() {
-                            state.preset = Some(col);
-                        }
-                    } else if col > 0 {
+            if state.indent == 0
+                && let Some(parent) = node.parent()
+            {
+                let _parentkind = parent.kind();
+                let end_row = parent.end_position().row;
+                let start_row = parent.start_position().row;
+                if end_row > start_row {
+                    if state.preset.is_none() {
                         state.preset = Some(col);
-                    } else {
-                        state.preset = None;
                     }
+                } else if col > 0 {
+                    state.preset = Some(col);
+                } else {
+                    state.preset = None;
                 }
             }
         }
@@ -80,49 +79,51 @@ fn update_state(root: &Node, index: usize, line: &str, mut state: FormatState) -
     state
 }
 
-fn format_source(root: &Node, source: &str) -> Vec<TextEdit> {
-    let mut state = FormatState {
-        preset: None,
-        indent: 0,
-        has_directive: false,
-    };
-    let mut formatted = String::from("");
-    let lines = source.lines();
-    let mut last_length = 0;
-    for (index, line) in lines.into_iter().enumerate() {
-        last_length = line.len();
-        state = update_state(root, index, line, state);
-        let preset = state.preset.unwrap_or_default();
-        if state.has_directive {
-            // todo: make indent step become a configuration
-            // currently use 4 whitespaces as the indent step by default
-            formatted += &(" ".repeat(preset + state.indent * 4) + line.trim() + "\n");
-        } else {
-            formatted += &(line.to_owned() + "\n");
-        }
-        state = reset_state(state);
-    }
-    let range = Range::new(
-        Position::new(0, 0),
-        Position::new(source.lines().count() as u32, last_length as u32),
-    );
-    vec![TextEdit::new(range, formatted)]
-}
-
 pub fn formatting_capability() -> OneOf<bool, DocumentFormattingOptions> {
     OneOf::Left(true)
 }
 
-impl Formatter for TextDocument {
+impl FormatFeature for Reactor {
     async fn on_formatting(
         &self,
         params: DocumentFormattingParams,
     ) -> JsonRpcResult<Option<Vec<TextEdit>>> {
-        let _ = params;
-        let ast = self.tree.as_ref().expect("ast should not be None");
-        let root = ast.root_node();
-        let source = &self.rope.to_string();
-        let result = format_source(&root, source);
-        Ok(Some(result))
+        let uri = params.text_document.uri;
+        window_log_info!(format!("on_formatting: {}", uri.to_string()));
+        let mut state = FormatState {
+            preset: None,
+            indent: 0,
+            has_directive: false,
+        };
+        let mut formatted = String::from("");
+        let mut last_length = 0;
+        let line_count = self.get_document().line_count();
+        self.get_document().enumerate_lines(|index, line| {
+            last_length = line.len();
+            state = update_state(self, index, line, state);
+            let preset = state.preset.unwrap_or_default();
+            if state.has_directive {
+                // todo: make indent step become a configuration
+                // currently use 4 whitespaces as the indent step by default
+                formatted += &(" ".repeat(preset + state.indent * 4) + line.trim());
+            } else {
+                formatted += line;
+            }
+            if index < line_count - 1 {
+                formatted += "\n";
+            }
+            state = reset_state(state);
+        });
+        let range = Range {
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: line_count as u32,
+                character: last_length as u32,
+            },
+        };
+        Ok(Some(vec![TextEdit::new(range, formatted)]))
     }
 }

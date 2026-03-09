@@ -88,7 +88,7 @@
             "named": true
           },
           {
-            "type": "macro_expansion",
+            "type": "macro_call",
             "named": true
           },
           {
@@ -896,7 +896,7 @@
           "named": true
         },
         {
-          "type": "macro_expansion",
+          "type": "macro_call",
           "named": true
         },
         {
@@ -923,7 +923,7 @@
           "named": true
         },
         {
-          "type": "macro_expansion",
+          "type": "macro_call",
           "named": true
         },
         {
@@ -1043,7 +1043,7 @@
           "named": true
         },
         {
-          "type": "macro_expansion",
+          "type": "macro_call",
           "named": true
         },
         {
@@ -1137,7 +1137,7 @@
           "named": true
         },
         {
-          "type": "macro_expansion",
+          "type": "macro_call",
           "named": true
         },
         {
@@ -1235,7 +1235,7 @@
             "named": true
           },
           {
-            "type": "macro_expansion",
+            "type": "macro_call",
             "named": true
           },
           {
@@ -1422,7 +1422,7 @@
           "named": true
         },
         {
-          "type": "macro_expansion",
+          "type": "macro_call",
           "named": true
         },
         {
@@ -1608,7 +1608,7 @@
             "named": true
           },
           {
-            "type": "macro_expansion",
+            "type": "macro_call",
             "named": true
           },
           {
@@ -1723,7 +1723,7 @@
             "named": true
           },
           {
-            "type": "macro_expansion",
+            "type": "macro_call",
             "named": true
           },
           {
@@ -1801,63 +1801,7 @@
     }
   },
   {
-    "type": "macro_clause",
-    "named": true,
-    "fields": {
-      "body": {
-        "multiple": true,
-        "required": false,
-        "types": [
-          {
-            "type": "comment",
-            "named": true
-          },
-          {
-            "type": "directive",
-            "named": true
-          },
-          {
-            "type": "macro_expansion",
-            "named": true
-          },
-          {
-            "type": "text",
-            "named": true
-          }
-        ]
-      },
-      "parameter": {
-        "multiple": true,
-        "required": false,
-        "types": [
-          {
-            "type": "assign_expression",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      }
-    },
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "close_tag",
-          "named": true
-        },
-        {
-          "type": "macro_name",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "macro_expansion",
+    "type": "macro_call",
     "named": true,
     "fields": {
       "parameter": {
@@ -1928,14 +1872,70 @@
           "named": true
         },
         {
-          "type": "macro_spec",
+          "type": "macro_namespace",
+          "named": true
+        },
+        {
+          "type": "macro_specs",
           "named": true
         }
       ]
     }
   },
   {
-    "type": "macro_spec",
+    "type": "macro_clause",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "comment",
+            "named": true
+          },
+          {
+            "type": "directive",
+            "named": true
+          },
+          {
+            "type": "macro_call",
+            "named": true
+          },
+          {
+            "type": "text",
+            "named": true
+          }
+        ]
+      },
+      "parameter": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "assign_expression",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "macro_close_tag",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "macro_specs",
     "named": true,
     "fields": {},
     "children": {
@@ -1945,10 +1945,6 @@
         {
           "type": "identifier",
           "named": true
-        },
-        {
-          "type": "macro_namespace",
-          "named": true
         }
       ]
     }
@@ -1956,7 +1952,18 @@
   {
     "type": "macro_stmt",
     "named": true,
-    "fields": {},
+    "fields": {
+      "macro_name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "macro_name",
+            "named": true
+          }
+        ]
+      }
+    },
     "children": {
       "multiple": true,
       "required": true,
@@ -2101,7 +2108,7 @@
           "named": true
         },
         {
-          "type": "macro_expansion",
+          "type": "macro_call",
           "named": true
         },
         {
@@ -2393,7 +2400,7 @@
           "named": true
         },
         {
-          "type": "macro_expansion",
+          "type": "macro_call",
           "named": true
         },
         {
@@ -2429,7 +2436,7 @@
           "named": true
         },
         {
-          "type": "macro_expansion",
+          "type": "macro_call",
           "named": true
         },
         {
@@ -2954,6 +2961,10 @@
   },
   {
     "type": "macro_close",
+    "named": true
+  },
+  {
+    "type": "macro_close_tag",
     "named": true
   },
   {

@@ -75,7 +75,7 @@ module.exports = grammar({
 
   conflicts: $ => [
     [$.subscript_expression, $._evaluate_expression],
-    [$.subscript_expression, $.macro_expansion],
+    [$.subscript_expression, $.macro_call],
   ],
 
   rules: {
@@ -84,7 +84,7 @@ module.exports = grammar({
     _definition: $ => choice(
       $._ftl_spec,
       $.text,
-      $.macro_expansion,
+      $.macro_call,
     ),
 
     _ftl_spec: $ => choice(
@@ -314,28 +314,23 @@ module.exports = grammar({
     /********** STATEMENT_BEGIN: "macro" ***********/
     macro_stmt: $ => seq(
       BeginAlias(keyword_macro, $.macro_begin),
+      FieldAlias(alias($.identifier, $.macro_name)),
       $.macro_clause,
       CloseAlias(keyword_macro, $.macro_close)
     ),
 
     macro_clause: $ => seq(
-      alias($.identifier, $.macro_name),
       field('parameter', optional(repeat(choice($.identifier, $.assign_expression)))),
       // TODO: support "..." syntax
-      $.close_tag,
+      alias($.close_tag, $.macro_close_tag),
       field('body', repeat($._definition)),
     ),
 
-    macro_spec: $ => seq(
-      alias($.identifier, $.macro_namespace),
-      optional(repeat(
-        seq('.', $.identifier)))
-    ),
-
-    macro_expansion: $ => seq(
+    macro_call: $ => seq(
       alias('<@', $.macro_call_begin),
-      $.macro_spec,
-      field('parameter', optional(repeat(choice($._primary_expression, $.assign_expression)))),
+      alias($.identifier, $.macro_namespace),
+      alias(repeat(seq('.', $.identifier)), $.macro_specs),
+      field('parameter', repeat(choice($._primary_expression, $.assign_expression))),
       alias('/>', $.macro_call_end)
     ),
     /********** STATEMENT_END: "macro" **************/

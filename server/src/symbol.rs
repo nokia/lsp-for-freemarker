@@ -2,286 +2,243 @@
 // Licensed under the BSD 3-Clause License.
 // SPDX-License-Identifier: BSD-3-Clause
 
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::{path::PathBuf, str::FromStr};
 
 use tower_lsp_server::ls_types::{
-    CodeDescription, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity,
-    FullDocumentDiagnosticReport, Location, NumberOrString, Range,
-    RelatedFullDocumentDiagnosticReport, Uri,
+    CodeDescription, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location,
+    NumberOrString, Range, Uri,
 };
 use tree_sitter::Node;
 use tree_sitter_freemarker::href::DIRECTIVE_IMPORT;
 use tree_sitter_freemarker::{SEMANTICS, grammar::Rule};
 
+use crate::diagnosis::Scenario;
 use crate::{
-    analysis::{Analysis, AstAnalyzer},
+    analysis::{Analysis, AnalysisContext, Symbol, SymbolAnalysis},
+    doc::TextDocument,
     utils,
 };
 
-#[derive(Debug, Clone)]
-pub struct ImportMacro {
-    pub alias_range: Range,
-    pub path: String,
-    pub path_range: Range,
-    pub path_valid: bool,
-}
+struct ImportWarning(&'static str, &'static str);
 
-#[derive(Debug, Clone)]
-pub struct LocalMacro {
-    pub alias_range: Range,
-    pub row: usize,
-}
+impl ImportWarning {
+    const PATH_DUPLICATED: Self = ImportWarning("path_duplicated", "import path is dupicated");
 
-#[derive(Debug, Clone)]
-pub enum MacroNamespace {
-    Local(LocalMacro),
-    Import(ImportMacro),
-}
-
-pub struct SymbolAnalyzer {
-    uri: Uri,
-    pub import_list: Vec<ImportMacro>,
-    pub path_map: HashMap<String, usize>,
-    pub diagnostic: Option<RelatedFullDocumentDiagnosticReport>,
-}
-
-impl SymbolAnalyzer {
-    pub fn new(uri: &Uri) -> Self {
-        SymbolAnalyzer {
-            uri: uri.clone(),
-            import_list: vec![],
-            path_map: HashMap::new(),
-            diagnostic: None,
+    pub fn build(
+        &self,
+        range: Range,
+        related_information: Option<Vec<DiagnosticRelatedInformation>>,
+    ) -> Diagnostic {
+        Diagnostic {
+            range,
+            severity: Some(DiagnosticSeverity::WARNING),
+            code: Some(NumberOrString::String(self.0.to_owned())),
+            code_description: Some(CodeDescription {
+                href: DIRECTIVE_IMPORT.parse().unwrap(),
+            }),
+            source: Some(SEMANTICS.to_owned()),
+            message: self.1.to_owned(),
+            related_information,
+            ..Default::default()
         }
     }
+}
 
-    fn add_diagnostic_item(&mut self, item: Diagnostic) {
-        match &mut self.diagnostic {
-            Some(report) => {
-                report.full_document_diagnostic_report.items.push(item);
+struct ImportError(&'static str, &'static str);
+
+impl ImportError {
+    const PATH_UNCANONICAL: Self = ImportError("path_uncanonical", "import path is uncanonical");
+    const PATH_NOT_FILE: Self = ImportError("path_not_file", "import path is not a file");
+    const PATH_NOT_EXISTS: Self = ImportError("path_not_exists", "import path is not exists");
+    const PATH_REF_SELF: Self = ImportError("path_refer_itself", "import path refers to itself");
+
+    pub fn build(
+        &self,
+        range: Range,
+        related_information: Option<Vec<DiagnosticRelatedInformation>>,
+    ) -> Diagnostic {
+        Diagnostic {
+            range,
+            severity: Some(DiagnosticSeverity::ERROR),
+            code: Some(NumberOrString::String(self.0.to_owned())),
+            code_description: Some(CodeDescription {
+                href: DIRECTIVE_IMPORT.parse().unwrap(),
+            }),
+            source: Some(SEMANTICS.to_owned()),
+            message: self.1.to_owned(),
+            related_information,
+            ..Default::default()
+        }
+    }
+}
+
+fn analyze_import_statement(
+    import_node: &Node,
+    doc: &TextDocument,
+    ctx: &mut AnalysisContext,
+    analysis: &mut Analysis,
+) {
+    // "import as" alias
+    let alias_node = import_node
+        .child_by_field_name(Rule::ImportAlias.to_string())
+        .unwrap();
+    let alias_range = utils::parser_node_to_document_range(&alias_node);
+    let import_alias = doc.get_ranged_text(alias_node.start_byte()..alias_node.end_byte());
+    analysis.add_symbol(
+        &import_alias,
+        Symbol {
+            rule: Rule::ImportAlias,
+            start_byte: alias_node.start_byte(),
+            end_byte: alias_node.end_byte(),
+            range: alias_range,
+        },
+    );
+
+    // import path
+    let path_node = import_node
+        .child_by_field_name(Rule::ImportPath.to_string())
+        .unwrap();
+    let path_range = utils::parser_node_to_document_range(&path_node);
+    // the tree-sitter parser had ensured the import_path is '"' quoted, so it is safe to slice like this [1..len()-1]
+    let import_path_str = doc.get_ranged_text(path_node.start_byte() + 1..path_node.end_byte() - 1);
+    let import_path_buf = PathBuf::from(&import_path_str);
+    let canonicalize_import = match import_path_buf.is_absolute() {
+        true => import_path_buf.canonicalize(),
+        false => doc.dir().join(import_path_buf).canonicalize(),
+    };
+
+    match canonicalize_import {
+        Ok(canonicalize_import_path) => {
+            if !canonicalize_import_path.is_file() {
+                // import must be a file
+                analysis.add_diagnostic(ImportError::PATH_NOT_FILE.build(path_range, None));
+            } else if !canonicalize_import_path.exists() {
+                // import must exists
+                analysis.add_diagnostic(ImportError::PATH_NOT_EXISTS.build(path_range, None));
+            } else if doc.canonical_uri() == canonicalize_import_path {
+                // don't import yourself
+                analysis.add_diagnostic(ImportError::PATH_REF_SELF.build(path_range, None));
             }
-            None => {
-                self.diagnostic = Some(RelatedFullDocumentDiagnosticReport {
-                    related_documents: None,
-                    full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                        result_id: None, // TODO: handle version
-                        items: vec![item],
-                    },
+            //
+            let canonicalize_import_str = canonicalize_import_path.to_str().unwrap();
+            ctx.import_map
+                .entry(canonicalize_import_str.to_string())
+                .and_modify(|symbols| {
+                    let first_definition = symbols[0];
+                    // import path duplicated
+                    analysis.add_diagnostic(ImportWarning::PATH_DUPLICATED.build(
+                        path_range,
+                        Some(vec![DiagnosticRelatedInformation {
+                            location: Location {
+                                uri: doc.uri(),
+                                range: first_definition.range,
+                            },
+                            message: "first imported here".to_owned(),
+                        }]),
+                    ));
+                })
+                .or_insert_with(|| {
+                    analysis.record_valid_import(
+                        &import_path_str, // record original text as key
+                        Uri::from_file_path(&canonicalize_import_path).unwrap(),
+                    );
+                    vec![Symbol {
+                        rule: Rule::ImportPath,
+                        start_byte: path_node.start_byte(),
+                        end_byte: path_node.end_byte(),
+                        range: path_range,
+                    }]
                 });
-            }
+        }
+        Err(_) => {
+            analysis.add_diagnostic(ImportError::PATH_UNCANONICAL.build(path_range, None));
         }
     }
+}
 
-    #[tracing::instrument(skip_all)]
-    fn analyze_import(
+fn analyze_macro_statement(
+    macro_node: &Node,
+    doc: &TextDocument,
+    _: &mut AnalysisContext,
+    analysis: &mut Analysis,
+) {
+    // "import as" alias
+    let name_node = macro_node
+        .child_by_field_name(Rule::MacroName.to_string())
+        .unwrap();
+    let name_range = utils::parser_node_to_document_range(&name_node);
+    let name_text = doc.get_ranged_text(name_node.start_byte()..name_node.end_byte());
+    analysis.add_symbol(
+        &name_text,
+        Symbol {
+            rule: Rule::MacroName,
+            start_byte: name_node.start_byte(),
+            end_byte: name_node.end_byte(),
+            range: name_range,
+        },
+    );
+}
+
+impl SymbolAnalysis for Analysis {
+    fn analyze_syntatic_symbols(
         &mut self,
-        path_node: &Node,
-        alias_node: &Node,
-        source: &str,
-        analysis: &mut Analysis,
+        node: &Node,
+        doc: &TextDocument,
+        ctx: &mut AnalysisContext,
     ) {
-        // the tree-sitter parser had ensured the import_path is '"' quoted, so it is safe to slice like this [1..len()-1]
-        let import_path = &source[path_node.start_byte() + 1..path_node.end_byte() - 1];
-        let import_alias = &source[alias_node.start_byte()..alias_node.end_byte()];
-        let path_range = utils::node_range(path_node);
-        let alias_range = utils::node_range(alias_node);
-        // Step1: file valid check
-        let file_path = Path::new(import_path);
-        let abs_import_path = match file_path.is_absolute() {
-            true => PathBuf::from(import_path),
-            false => {
-                // relative directory is relative to current file?
-                let self_binding = self.uri.to_file_path().unwrap();
-                let base_dir = self_binding.parent().unwrap();
-                let rest = PathBuf::from(import_path);
-                base_dir.join(rest)
-            }
-        };
-        let file_is_valid = match abs_import_path.is_file() {
-            true => true,
-            false => {
-                let (error_code, error_message) = match abs_import_path.exists() {
-                    true => ("import_path_not_file", "import path is not a file"),
-                    false => ("import_path_not_exist", "import path does not exist"),
-                };
-                self.add_diagnostic_item(Diagnostic {
-                    range: path_range,
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    code: Some(NumberOrString::String(error_code.to_owned())),
-                    code_description: Some(CodeDescription {
-                        href: DIRECTIVE_IMPORT.parse().unwrap(),
-                    }),
-                    source: Some(SEMANTICS.to_owned()),
-                    message: error_message.to_string(),
-                    ..Default::default()
-                });
-                false
-            }
-        };
-        // Step0, the import-stmt MUST to be recorded
-        let import_macro = ImportMacro {
-            alias_range,
-            path: import_path.to_owned(),
-            path_range,
-            path_valid: file_is_valid,
-        };
-        let import_index = self.import_list.len();
-        // push to [macro] list
-        self.import_list.push(import_macro.clone());
-        // Step2: do not self-import
-        if file_is_valid {
-            let import_binding = abs_import_path.canonicalize().unwrap();
-            let canonical_import_path = import_binding.to_str().unwrap();
-            tracing::debug!("canonical_import_path is {:?}", canonical_import_path);
-            let self_binding = self.uri.to_file_path().unwrap();
-            let canonical_self_path = self_binding.to_str().unwrap();
-            if canonical_import_path == canonical_self_path {
-                self.add_diagnostic_item(Diagnostic {
-                    range: path_range,
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    code: Some(NumberOrString::String("self_import".to_owned())),
-                    code_description: Some(CodeDescription {
-                        href: DIRECTIVE_IMPORT.parse().unwrap(),
-                    }),
-                    source: Some(SEMANTICS.to_owned()),
-                    // TODO: need to check circular import?
-                    message: "do not import the template itself".to_string(),
-                    ..Default::default()
-                });
-            } else {
-                // save raw import path
-                analysis.valid_imports.insert(
-                    import_path.to_owned(),
-                    Uri::from_file_path(canonical_import_path).unwrap(),
-                );
-            }
-
-            // Step3: path duplication check
-            if self.path_map.contains_key(canonical_import_path) {
-                let first_import_index = self.path_map.get(canonical_import_path).unwrap();
-                let first_import = &self.import_list[*first_import_index];
-                self.add_diagnostic_item(Diagnostic {
-                    range: path_range,
-                    severity: Some(DiagnosticSeverity::WARNING),
-                    code: Some(NumberOrString::String("import_path_duplicated".to_owned())),
-                    code_description: Some(CodeDescription {
-                        href: DIRECTIVE_IMPORT.parse().unwrap(),
-                    }),
-                    source: Some(SEMANTICS.to_owned()),
-                    message: "import path is duplicated".to_string(),
-                    related_information: Some(vec![DiagnosticRelatedInformation {
-                        location: Location {
-                            uri: self.uri.clone(),
-                            range: first_import.path_range,
-                        },
-                        message: "first imported here".to_owned(),
-                    }]),
-                    ..Default::default()
-                });
-            } else {
-                // new path, add to [path, macro] map
-                self.path_map
-                    .insert(canonical_import_path.to_owned(), import_index);
-            }
-        }
-
-        // Step4: alias duplication check
-        if analysis.macro_map.contains_key(import_alias) {
-            let first_define = analysis.macro_map.get(import_alias).unwrap();
-            self.add_diagnostic_item(Diagnostic {
-                range: alias_range,
-                severity: Some(DiagnosticSeverity::ERROR),
-                code: Some(NumberOrString::String(
-                    "import_namespace_duplicated".to_owned(),
-                )),
-                code_description: Some(CodeDescription {
-                    href: DIRECTIVE_IMPORT.parse().unwrap(),
-                }),
-                source: Some(SEMANTICS.to_owned()),
-                message: "import namespace is duplicated".to_string(),
-                related_information: Some(vec![DiagnosticRelatedInformation {
-                    location: Location {
-                        uri: self.uri.clone(),
-                        range: match first_define {
-                            MacroNamespace::Local(local_name) => local_name.alias_range,
-                            MacroNamespace::Import(import_name) => import_name.alias_range,
-                        },
-                    },
-                    message: "first defined here".to_owned(),
-                }]),
-                ..Default::default()
-            });
-        } else {
-            // add to [alias, macro] table
-            analysis.macro_map.insert(
-                import_alias.to_owned(),
-                MacroNamespace::Import(import_macro),
-            );
-        }
-    }
-}
-
-impl AstAnalyzer for SymbolAnalyzer {
-    fn analyze_node(&mut self, node: &Node, source: &str, analysis: &mut Analysis) {
         let rule = Rule::from_str(node.kind());
         if rule.is_err() {
             return;
         }
         match rule.unwrap() {
             Rule::ImportStmt => {
-                // hardcoded according to tree-sitter-freemarker/grammar.js
-                let import_path_node = node
-                    .child_by_field_name(Rule::ImportPath.to_string())
-                    .unwrap();
-                let import_alias_node = node
-                    .child_by_field_name(Rule::ImportAlias.to_string())
-                    .unwrap();
-                self.analyze_import(&import_path_node, &import_alias_node, source, analysis);
+                analyze_import_statement(node, doc, ctx, self);
             }
-            Rule::MacroName => {
-                let macro_name = &source[node.start_byte()..node.end_byte()];
-                let node_range = utils::node_range(node);
-                // TODO: fake import, improve it
-                if analysis.macro_map.contains_key(macro_name) {
-                    let first_define = analysis.macro_map.get(macro_name).unwrap();
-                    self.add_diagnostic_item(Diagnostic {
-                        range: node_range,
+            Rule::MacroStmt => {
+                analyze_macro_statement(node, doc, ctx, self);
+            }
+            _ => {}
+        }
+    }
+
+    fn post_syntatic_analysis(&mut self, doc: &TextDocument, ctx: &mut AnalysisContext) {
+        // check duplicated symbols
+        let mut duplicated_symbols = vec![];
+        self.foreach_symbol(|_, symbols| {
+            if symbols.len() > 1 {
+                let first_definition = symbols[0];
+                for redefinition in symbols.iter().skip(1) {
+                    duplicated_symbols.push(Diagnostic {
+                        range: redefinition.range,
                         severity: Some(DiagnosticSeverity::ERROR),
-                        code: Some(NumberOrString::String(
-                            "import_namespace_duplicated".to_owned(),
-                        )),
-                        code_description: Some(CodeDescription {
-                            href: DIRECTIVE_IMPORT.parse().unwrap(),
-                        }),
+                        code: Some(NumberOrString::String("duplicated_symbol".to_owned())),
                         source: Some(SEMANTICS.to_owned()),
-                        message: "import namespace is duplicated".to_string(),
+                        message: "redefinition of symbol".to_owned(),
                         related_information: Some(vec![DiagnosticRelatedInformation {
                             location: Location {
-                                uri: self.uri.clone(),
-                                range: match first_define {
-                                    MacroNamespace::Local(local_name) => local_name.alias_range,
-                                    MacroNamespace::Import(import_name) => import_name.alias_range,
-                                },
+                                uri: doc.uri(),
+                                range: first_definition.range,
                             },
                             message: "first defined here".to_owned(),
                         }]),
                         ..Default::default()
                     });
-                } else {
-                    analysis.macro_map.insert(
-                        macro_name.to_owned(),
-                        MacroNamespace::Local(LocalMacro {
-                            alias_range: node_range,
-                            row: node.start_position().row,
-                        }),
-                    );
                 }
             }
-            _ => {}
-        }
+        });
+        self.add_diagnostics(duplicated_symbols);
+        // check undefined macro calls
+        ctx.macro_call_map
+            .iter()
+            .for_each(|(call_name, call_symbols)| {
+                if self.find_symbol_definition(call_name).is_err() {
+                    call_symbols.iter().for_each(|sym| {
+                        self.add_diagnostic(Diagnostic {
+                            range: sym.range,
+                            ..Scenario::UNDEFINED_MACRO.into()
+                        })
+                    })
+                }
+            });
     }
 }

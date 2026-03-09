@@ -2,18 +2,18 @@
 // Licensed under the BSD 3-Clause License.
 // SPDX-License-Identifier: BSD-3-Clause
 
-use std::{collections::HashMap, str::FromStr};
+use std::str::FromStr;
 use tower_lsp_server::{
     jsonrpc::Result as JsonRpcResult,
     ls_types::{
         CodeAction, CodeActionKind, CodeActionOptions, CodeActionOrCommand, CodeActionParams,
-        CodeActionProviderCapability, Diagnostic, NumberOrString, TextEdit, Uri,
-        WorkDoneProgressOptions, WorkspaceEdit,
+        CodeActionProviderCapability, Diagnostic, NumberOrString, TextEdit, Uri, WorkspaceEdit,
     },
 };
+
 use tree_sitter_freemarker::grammar::Rule;
 
-use crate::{doc::TextDocument, protocol::Action};
+use crate::{reactor::Reactor, server::ActionFeature};
 
 #[allow(clippy::mutable_key_type)]
 fn create_fix_warning_action(
@@ -21,50 +21,41 @@ fn create_fix_warning_action(
     uri: &Uri,
     diagnostic: Diagnostic,
 ) -> Option<CodeActionOrCommand> {
-    let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
-
+    let rule = Rule::from_str(code.as_str());
+    if rule.is_err() {
+        return None;
+    }
     // The TextEdit describes replacing the diagnostic's range with the correct text
     let text_edit = TextEdit {
         range: diagnostic.range,
-        new_text: match Rule::from_str(code.as_str()) {
-            Ok(rule) => match rule {
-                Rule::DeprecatedEqualOperator => "==".to_string(),
-                Rule::UndocumentedCloseTag => ">".to_string(),
-                _ => return None,
-            },
-            Err(_) => return None,
+        new_text: match rule.unwrap() {
+            Rule::DeprecatedEqualOperator => "==".to_string(),
+            Rule::UndocumentedCloseTag => ">".to_string(),
+            _ => return None,
         },
     };
-
-    changes.insert(uri.clone(), vec![text_edit]);
 
     Some(CodeActionOrCommand::CodeAction(CodeAction {
         title: format!("fix warning: {}", code),
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diagnostic]), // Link this action to the diagnostic it fixes
         edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
+            changes: Some(vec![(uri.clone(), vec![text_edit])].into_iter().collect()),
+            ..Default::default()
         }),
-        command: None,
         is_preferred: Some(true), // Suggest this as the primary fix
-        data: None,
-        disabled: None,
+        ..Default::default()
     }))
 }
 
 pub fn code_action_capability() -> CodeActionProviderCapability {
     CodeActionProviderCapability::Options(CodeActionOptions {
         code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
-        work_done_progress_options: WorkDoneProgressOptions::default(),
-        resolve_provider: None,
-        //FIXME: Use Default here once https://github.com/gluon-lang/lsp-types/issues/260 is resolved.
-        // ..Default::default()
+        ..Default::default()
     })
 }
 
-impl Action for TextDocument {
+impl ActionFeature for Reactor {
     async fn on_code_action(
         &self,
         params: CodeActionParams,

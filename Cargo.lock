@@ -33,6 +33,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc0b364ead1874514c8c2855ab558056ebfeb775653e7ae45ff72f28f8f3166c"
 
 [[package]]
+name = "bstr"
+version = "1.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63044e1ae8e69f3b5a92c736ca6269b8d12fa7efe39bf34ddb06d102cf0e2cab"
+dependencies = [
+ "memchr",
+ "serde",
+]
+
+[[package]]
 name = "bytes"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -172,27 +182,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ftl-lsp-server"
-version = "0.1.0"
-dependencies = [
- "once_cell",
- "ropey",
- "rust-embed",
- "serde",
- "strum",
- "strum_macros",
- "thiserror",
- "tokio",
- "toml",
- "tower-lsp-server",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "tree-sitter",
- "tree-sitter-freemarker",
-]
-
-[[package]]
 name = "futures"
 version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -280,6 +269,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "globset"
+version = "0.4.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52dfc19153a48bde0cbd630453615c8151bce3a5adfac7a0aebfbf0a1e1f57e3"
+dependencies = [
+ "aho-corasick",
+ "bstr",
+ "log",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -357,6 +359,27 @@ dependencies = [
  "percent-encoding",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lsp-for-freemarker"
+version = "0.1.0"
+dependencies = [
+ "once_cell",
+ "ropey",
+ "rust-embed",
+ "serde",
+ "strum",
+ "strum_macros",
+ "thiserror",
+ "tokio",
+ "toml",
+ "tower-lsp-server",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-freemarker",
 ]
 
 [[package]]
@@ -560,6 +583,7 @@ version = "8.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60b161f275cb337fe0a44d924a5f4df0ed69c2c39519858f931ce61c779d3475"
 dependencies = [
+ "globset",
  "sha2",
  "walkdir",
 ]

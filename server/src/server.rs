@@ -2,28 +2,29 @@
 // Licensed under the BSD 3-Clause License.
 // SPDX-License-Identifier: BSD-3-Clause
 
-use std::fmt::Display;
-use std::str::FromStr;
-use std::{collections::HashMap, sync::Arc};
-use tokio::sync::RwLock;
+use std::sync::Arc;
 
-use tower_lsp_server::ls_types::{
-    DeleteFilesParams, DidChangeWatchedFilesParams, FileChangeType, FileEvent,
-};
+use tokio::sync::RwLock;
 use tower_lsp_server::{
-    Client,
+    Client, LanguageServer, jsonrpc,
     ls_types::{
-        DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-        MessageType, TextDocumentContentChangeEvent, Uri,
+        CodeActionOrCommand, CodeActionParams, CompletionItem, CompletionParams,
+        CompletionResponse, DeleteFilesParams, DidChangeTextDocumentParams,
+        DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+        DocumentDiagnosticParams, DocumentDiagnosticReportResult, DocumentFormattingParams,
+        FoldingRange, FoldingRangeParams, GotoDefinitionParams, GotoDefinitionResponse, Hover,
+        HoverParams, InitializeParams, InitializeResult, InitializedParams, SemanticTokensParams,
+        SemanticTokensResult, TextEdit,
     },
 };
+use tracing::{self, instrument};
 
-use crate::doc::{PositionEncodingKind, TextDocument};
+use crate::{client::save_client, window_log_info, workspace::Workspace};
 
+#[derive(Debug)]
 pub struct Server {
-    pub client: Client,
-    pub(crate) doc_map: Arc<RwLock<HashMap<Uri, TextDocument>>>,
     pub(crate) root_path: Arc<RwLock<String>>,
+    pub(crate) workspace: Workspace,
 }
 
 impl Server {
@@ -31,89 +32,164 @@ impl Server {
     pub const CODE_NAME: &str = "lsp-for-freemarker";
 
     pub fn new(client: Client) -> Self {
+        let _ = save_client(client);
         Self {
-            client,
-            doc_map: Arc::new(RwLock::new(HashMap::new())),
             root_path: Arc::new(RwLock::new(String::new())),
+            workspace: Workspace::new(),
         }
     }
+}
 
-    // TODO: add log_debug support, currently MessageType only support INFO/WARNING/ERROR
-    // see also https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#messageType
-    pub async fn log_info<M: Display>(&self, message: M) {
-        self.client.log_message(MessageType::INFO, message).await;
+pub trait Initializer {
+    async fn on_initialize(&self, params: InitializeParams) -> InitializeResult;
+}
+
+//#[tower_lsp_server::async_trait]
+impl LanguageServer for Server {
+    async fn initialize(&self, params: InitializeParams) -> jsonrpc::Result<InitializeResult> {
+        return Ok(self.on_initialize(params).await);
     }
 
-    #[tracing::instrument(skip_all)]
-    pub async fn update_file(
+    async fn initialized(&self, _: InitializedParams) {
+        window_log_info!("[Server] initialized.");
+    }
+
+    async fn shutdown(&self) -> jsonrpc::Result<()> {
+        window_log_info!("[Server] shutdown :)");
+        Ok(())
+    }
+
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        self.workspace.on_did_open(&params).await;
+    }
+
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        self.workspace.on_did_change(&params).await;
+    }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let uri = &params.text_document.uri;
+        window_log_info!(format!("did_close: {:?}", uri.to_string()));
+    }
+
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        self.workspace.on_did_change_watched_files(params).await;
+    }
+
+    async fn did_delete_files(&self, params: DeleteFilesParams) {
+        self.workspace.on_did_delete_files(params).await;
+    }
+
+    // LSP request/response
+    async fn diagnostic(
         &self,
-        url: &Uri,
-        version: i32,
-        change: &TextDocumentContentChangeEvent,
-    ) {
-        let mut wr = self.doc_map.write().await;
-        if let Some(doc) = wr.get_mut(url) {
-            tracing::debug!("previous file version: {}", doc.version);
-            doc.apply_content_change(version, change, PositionEncodingKind::UTF8)
-                .unwrap();
-        }
+        params: DocumentDiagnosticParams,
+    ) -> jsonrpc::Result<DocumentDiagnosticReportResult> {
+        self.workspace.on_diagnostic(params).await
     }
 
-    pub async fn on_did_open(&self, params: &DidOpenTextDocumentParams) {
-        let url: &Uri = &params.text_document.uri;
-        let version: i32 = params.text_document.version;
-        let source_code = params.text_document.text.as_str();
-        let mut wr = self.doc_map.write().await;
-        if match wr.get(url) {
-            Some(exist) => exist.version != version,
-            None => true,
-        } {
-            let doc = TextDocument::new(url, source_code, version);
-            wr.insert(url.clone(), doc);
-        }
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> jsonrpc::Result<Option<SemanticTokensResult>> {
+        self.workspace.on_semantic_tokens_full(params).await
     }
 
-    #[tracing::instrument(skip_all)]
-    pub async fn on_did_change(&self, params: &DidChangeTextDocumentParams) {
-        let url = &params.text_document.uri;
-        let version = params.text_document.version;
-        tracing::debug!("on_did_change: {:?}", url.to_file_path().unwrap());
-        for c in &params.content_changes {
-            // assume only changes
-            if let Some(range) = c.range {
-                tracing::debug!("range: {:?}", range);
-                self.update_file(url, version, c).await;
-            } else {
-                tracing::debug!("full text change");
-            }
-        }
+    async fn hover(&self, params: HoverParams) -> jsonrpc::Result<Option<Hover>> {
+        self.workspace.on_hover(params).await
     }
 
-    #[tracing::instrument(skip_all)]
-    pub async fn on_did_close(&self, params: &DidCloseTextDocumentParams) {
-        let url = &params.text_document.uri;
-        tracing::debug!("on_did_close: {:?}", url.to_file_path().unwrap());
+    async fn completion(
+        &self,
+        params: CompletionParams,
+    ) -> jsonrpc::Result<Option<CompletionResponse>> {
+        self.workspace.on_completion(params).await
     }
 
-    pub async fn on_did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
-        let DidChangeWatchedFilesParams { changes } = params;
-        let uris: Vec<_> = changes
-            .into_iter()
-            .map(|FileEvent { uri, typ }| {
-                assert_eq!(typ, FileChangeType::DELETED);
-                uri
-            })
-            .collect();
-        for uri in uris {
-            self.doc_map.write().await.remove(&uri);
-        }
+    #[instrument(skip_all)]
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> jsonrpc::Result<Option<GotoDefinitionResponse>> {
+        self.workspace.on_goto_definition(params).await
     }
 
-    pub async fn on_did_delete_files(&self, params: DeleteFilesParams) {
-        self.log_info("on_did_delete_files:").await;
-        for f in &params.files {
-            let url = Uri::from_str(&f.uri).unwrap();
-            self.doc_map.write().await.remove(&url);
-        }
+    #[instrument(skip_all)]
+    async fn formatting(
+        &self,
+        params: DocumentFormattingParams,
+    ) -> jsonrpc::Result<Option<Vec<TextEdit>>> {
+        self.workspace.on_formatting(params).await
     }
+
+    async fn folding_range(
+        &self,
+        params: FoldingRangeParams,
+    ) -> jsonrpc::Result<Option<Vec<FoldingRange>>> {
+        self.workspace.on_folding_range(params).await
+    }
+
+    async fn code_action(
+        &self,
+        params: CodeActionParams,
+    ) -> jsonrpc::Result<Option<Vec<CodeActionOrCommand>>> {
+        self.workspace.on_code_action(params).await
+    }
+}
+
+// LSP features
+pub trait ActionFeature {
+    async fn on_code_action(
+        &self,
+        params: CodeActionParams,
+    ) -> jsonrpc::Result<Option<Vec<CodeActionOrCommand>>>;
+}
+
+pub trait CompletionFeature {
+    async fn on_completion(
+        &self,
+        params: CompletionParams,
+    ) -> jsonrpc::Result<Option<CompletionResponse>>;
+
+    fn list_macro_definitions(&self) -> Vec<CompletionItem>;
+}
+
+pub trait DiagnosticFeature {
+    async fn on_diagnostic(
+        &self,
+        params: DocumentDiagnosticParams,
+    ) -> jsonrpc::Result<DocumentDiagnosticReportResult>;
+}
+
+pub trait FoldingFeature {
+    async fn on_folding_range(
+        &self,
+        params: FoldingRangeParams,
+    ) -> jsonrpc::Result<Option<Vec<FoldingRange>>>;
+}
+
+pub trait FormatFeature {
+    async fn on_formatting(
+        &self,
+        params: DocumentFormattingParams,
+    ) -> jsonrpc::Result<Option<Vec<TextEdit>>>;
+}
+
+pub trait GotoFeature {
+    async fn on_goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> jsonrpc::Result<Option<GotoDefinitionResponse>>;
+}
+
+pub trait HoverFeature {
+    //fn on_node(&self, position: Position) -> Option<Node<'_>>;
+    async fn on_hover(&self, params: HoverParams) -> jsonrpc::Result<Option<Hover>>;
+}
+
+pub trait SemanticTokenFeature {
+    async fn on_semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> jsonrpc::Result<Option<SemanticTokensResult>>;
 }

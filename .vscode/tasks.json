@@ -4,8 +4,21 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "npm: install",
+            "type": "npm",
+            "script": "install",
+            "path": "clients/vsce",
+            "group": "build",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "silent",
+                "focus": false
+            }
+        },
+        {
             "label": "watch",
             "dependsOn": [
+                "npm: install",
                 "npm: watch:tsc",
                 "npm: watch:esbuild"
             ],
@@ -58,6 +71,7 @@
         {
             "label": "tasks: watch-tests",
             "dependsOn": [
+                "npm: install",
                 "npm: watch",
                 "npm: watch-tests"
             ],
@@ -69,6 +83,9 @@
             "path": "clients/vsce",
             "group": "build",
             "problemMatcher": [],
+            "dependsOn": [
+                "npm: install"
+            ],
             "label": "npm: build-server-and-client"
         }
     ]

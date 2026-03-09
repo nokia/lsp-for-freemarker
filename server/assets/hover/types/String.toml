@@ -1,0 +1,12 @@
+# identifier aligns with grammar.rs
+identifier = "string_literal"
+category = "types"
+markdown = """
+# String
+---
+> category: [The types](https://freemarker.apache.org/docs/dgui_datamodel_types.html)
+---
+String: It is simple text, e.g., the name of a product.
+
+If you want to give a string value directly in the template, rather than use a variable that comes from the data model, you write the text between quotation marks, e.g., `"green mouse"` or `'green mouse'`. (More details regarding the syntax can be found [later](https://freemarker.apache.org/docs/dgui_template_exp.html#dgui_template_exp_direct_string).)
+"""

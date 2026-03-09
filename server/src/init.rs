@@ -7,11 +7,12 @@ use tower_lsp_server::ls_types::{
     InitializeResult, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
     TextDocumentSyncKind, WorkspaceFileOperationsServerCapabilities, WorkspaceServerCapabilities,
 };
+use tracing::{Level, event};
 
-use crate::protocol::Initializer;
-
-use crate::server::Server;
-use crate::{action, completion, diagnosis, folding, format, goto, hover, tokenizer};
+use crate::server::{Initializer, Server};
+use crate::{
+    action, completion, diagnosis, folding, format, goto, hover, tokenizer, window_log_info,
+};
 
 fn do_initialize() -> InitializeResult {
     InitializeResult {
@@ -53,10 +54,16 @@ fn do_initialize() -> InitializeResult {
 
 impl Initializer for Server {
     #[allow(deprecated)]
-    #[tracing::instrument(skip_all)]
     async fn on_initialize(&self, params: InitializeParams) -> InitializeResult {
-        let mut root_path = self.root_path.write().await;
-        root_path.clone_from(&params.root_path.unwrap_or_default());
+        window_log_info!("[Server] initializing...");
+        if let Ok(mut root_path) = self.root_path.try_write() {
+            event!(
+                Level::DEBUG,
+                process = params.process_id,
+                pwd = params.root_path
+            );
+            root_path.clone_from(&params.root_path.unwrap_or_default());
+        }
         do_initialize()
     }
 }

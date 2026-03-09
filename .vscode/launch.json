@@ -16,7 +16,7 @@
                 "${workspaceFolder}/clients/vsce/**/*"
             ],
             "env": {
-                "__FTL_LSP_SERVER_DEBUG": "${workspaceFolder}/target/debug/ftl-lsp-server"
+                "__LSP_SERVER_BIN": "${workspaceFolder}/target/debug/lsp-for-freemarker"
             },
             "autoAttachChildProcesses": true,
             "preLaunchTask": "npm: build-server-and-client"
@@ -26,7 +26,7 @@
             "type": "lldb",
             "request": "attach",
             //"pid": "${command:pickProcess}",
-            "program": "${workspaceFolder}/target/debug/ftl-lsp-server",
+            "program": "${workspaceFolder}/target/debug/lsp-for-freemarker",
             "sourceLanguages": [
                 "rust"
             ]

@@ -1,0 +1,91 @@
+name: Rust CI
+
+# trigger condition push/pull request to master/main
+on:
+  push:
+    branches: [devel]
+  pull_request:
+    branches: [main, master]
+
+# workflow
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            any:
+              - 'parser/tree-sitter-freemarker/grammar.js'
+              - 'parser/tree-sitter-freemarker/Cargo.toml'
+              - 'parser/tree-sitter-freemarker/bindings/rust/**'
+              - 'parser/tree-sitter-freemarker/src/**'
+              - 'server/Cargo.toml'
+              - 'server/src/**'
+              - 'server/assets/**'
+              - 'Cargo.toml'
+
+      - name: Set up Rust
+        if: steps.changes.outputs.any == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo dependencies
+        if: steps.changes.outputs.any == 'true'
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run clippy linter
+        if: steps.changes.outputs.any == 'true'
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build project
+        if: steps.changes.outputs.any == 'true'
+        run: cargo build --verbose
+
+      - name: Run tests
+        if: steps.changes.outputs.any == 'true'
+        run: cargo test --verbose
+
+  cross-platform-test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: build-and-test
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            any:
+              - 'parser/tree-sitter-freemarker/grammar.js'
+              - 'parser/tree-sitter-freemarker/Cargo.toml'
+              - 'parser/tree-sitter-freemarker/bindings/rust/**'
+              - 'parser/tree-sitter-freemarker/src/**'
+              - 'server/Cargo.toml'
+              - 'server/src/**'
+              - 'server/assets/**'
+              - 'Cargo.toml'
+
+      - name: Set up Rust
+        if: steps.changes.outputs.any == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        if: steps.changes.outputs.any == 'true'
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        if: steps.changes.outputs.any == 'true'
+        run: cargo test --verbose

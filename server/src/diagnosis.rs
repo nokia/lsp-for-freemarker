@@ -3,25 +3,30 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 use std::str::FromStr;
+
 use tower_lsp_server::{
     jsonrpc,
     ls_types::{
         CodeDescription, Diagnostic, DiagnosticOptions, DiagnosticServerCapabilities,
         DiagnosticSeverity, DocumentDiagnosticParams, DocumentDiagnosticReport,
-        DocumentDiagnosticReportResult, NumberOrString, Position, Range,
+        DocumentDiagnosticReportResult, NumberOrString,
     },
 };
 use tree_sitter::Node;
 use tree_sitter_freemarker::{
     SEMANTICS, SYNTAX,
-    href::{DIRECTIVE_ASSIGN, DIRECTIVE_IMPORT, DIRECTIVE_LIST_BREAK, TOPLEVEL_VARIABLE},
+    grammar::Rule,
+    href::{
+        COMPARISION_EXPRESSION, DIRECTIVE_ASSIGN, DIRECTIVE_IMPORT, DIRECTIVE_LIST_BREAK,
+        TOPLEVEL_VARIABLE,
+    },
 };
-use tree_sitter_freemarker::{grammar::Rule, href::COMPARISION_EXPRESSION};
 
 use crate::{
-    analysis::{Analysis, AstAnalyzer},
+    analysis::{Analysis, AnalysisContext, DiagnosticAnalysis, Symbol},
     doc::TextDocument,
-    protocol::Diagnose,
+    reactor::Reactor,
+    server::DiagnosticFeature,
     utils,
 };
 
@@ -43,11 +48,11 @@ pub struct Scenario {
 }
 
 impl Scenario {
-    const UNDEFINED_MACRO: Scenario = Scenario {
+    pub const UNDEFINED_MACRO: Scenario = Scenario {
         severity: DiagnosticSeverity::ERROR,
         code: "undefined_macro",
         source: SEMANTICS,
-        message: "macro definition not found",
+        message: "Macro definition not found.",
         href: DIRECTIVE_IMPORT,
     };
 
@@ -55,7 +60,7 @@ impl Scenario {
         severity: DiagnosticSeverity::INFORMATION,
         code: "identifier_has_backslash",
         source: SYNTAX,
-        message: "Reserved characters in the identifier must be escaped with a preceding backslash (\\), which decrease the readability, try best to avoid it.",
+        message: "Identifiers containing reserved characters require escaping with a backslash (\\), which can significantly reduce readability. Consider refactoring to avoid such identifiers.",
         href: TOPLEVEL_VARIABLE,
     };
 
@@ -63,7 +68,7 @@ impl Scenario {
         severity: DiagnosticSeverity::WARNING,
         code: "ambiguous_string_literal",
         source: SYNTAX,
-        message: "Even though it is a valid syntax for <#assign> and <#local>, using string literal as L-value is still toxic.",
+        message: "While using a string literal as an L-value is syntactically valid for <#assign> and <#local>, this practice is generally discouraged due to potential ambiguity and reduced maintainability.",
         href: DIRECTIVE_ASSIGN,
     };
 
@@ -71,7 +76,7 @@ impl Scenario {
         severity: DiagnosticSeverity::WARNING,
         code: "deprecated_equal_operator",
         source: SYNTAX,
-        message: "In the context of comparisons, use '==' for equality checks, '=' is a deprecated alternative.",
+        message: "For equality checks in comparisons, use '=='. The single '=' operator is deprecated for this purpose.",
         href: COMPARISION_EXPRESSION,
     };
 
@@ -79,7 +84,7 @@ impl Scenario {
         severity: DiagnosticSeverity::WARNING,
         code: "undocumented_close_tag",
         source: SYNTAX,
-        message: "Suggest using '>' as the close tag for non-capture <#assign>, '/>' is undocumented and wastes 1 more character.",
+        message: "For non-capture <#assign> directives, it is recommended to use '>' as the close tag. Using '/>' is undocumented and adds unnecessary characters.",
         href: DIRECTIVE_ASSIGN,
     };
 
@@ -87,7 +92,7 @@ impl Scenario {
         severity: DiagnosticSeverity::WARNING,
         code: "deprecated_list_break",
         source: SYNTAX,
-        message: "break is deprecated for most use cases, as it doesn't work well with <#sep> and item?has_next. Instead, use sequence?take_while(predicate) to cut the sequence before you list it.",
+        message: "<#break> is deprecated for most list-related use cases, as it can interfere with <#sep> and item?has_next. Instead, consider using sequence?take_while(predicate) to filter the sequence before iteration.",
         href: DIRECTIVE_LIST_BREAK,
     };
 
@@ -95,7 +100,7 @@ impl Scenario {
         severity: DiagnosticSeverity::ERROR,
         code: "unexpected_break_stmt",
         source: SYNTAX,
-        message: "<#break> can only be used within <#list> or <#switch>.",
+        message: "The <#break> directive can only be used within <#list> or <#switch> blocks.",
         href: DIRECTIVE_LIST_BREAK,
     };
 }
@@ -115,40 +120,19 @@ impl From<Scenario> for Diagnostic {
     }
 }
 
-pub struct DiagnosticAnalyzer {
-    pub scope: Vec<Rule>,
-}
-
-impl DiagnosticAnalyzer {
-    pub fn new() -> Self {
-        DiagnosticAnalyzer { scope: vec![] }
-    }
-
-    fn diagnos_node(
+impl DiagnosticAnalysis for Analysis {
+    fn analyze_diagnostic_report(
         &mut self,
         node: &Node,
-        code: &str,
-        analysis: &mut Analysis,
-    ) -> Option<Diagnostic> {
-        let start_pos = node.start_position();
-        let end_pos = node.end_position();
-        let start = Position {
-            line: start_pos.row as u32,
-            character: start_pos.column as u32,
-        };
-        let end = Position {
-            line: end_pos.row as u32,
-            character: end_pos.column as u32,
-        };
-        let range: Range = Range { start, end };
+        doc: &TextDocument,
+        ctx: &mut AnalysisContext,
+    ) {
         let node_kind = node.kind();
-        let start_byte = node.start_byte();
-        let end_byte = node.end_byte();
-        let snippet = &code[start_byte..end_byte];
+        let range = utils::parser_node_to_document_range(node);
         // TODO: maybe use tree-sitter query in the future
         if node.is_missing() {
             // TODO : maybe use query in the future
-            return Some(Diagnostic {
+            self.add_diagnostic(Diagnostic {
                 range,
                 severity: Some(DiagnosticSeverity::ERROR),
                 source: Some(SYNTAX.to_owned()),
@@ -158,11 +142,12 @@ impl DiagnosticAnalyzer {
         }
 
         if node.is_error() {
-            return Some(Diagnostic {
+            let node_text = doc.get_ranged_text(node.start_byte()..node.end_byte());
+            self.add_diagnostic(Diagnostic {
                 range,
                 severity: Some(DiagnosticSeverity::ERROR),
                 source: Some(SYNTAX.to_owned()),
-                message: format!("ERROR: Unexpected '{}'.\n", snippet),
+                message: format!("ERROR: Unexpected '{}'.\n", node_text),
                 ..Default::default()
             });
         }
@@ -170,88 +155,79 @@ impl DiagnosticAnalyzer {
         if let Ok(rule) = Rule::from_str(node_kind) {
             match rule {
                 Rule::Identifier => {
-                    if snippet.contains("\\") {
-                        return Some(Diagnostic {
+                    let node_text = doc.get_ranged_text(node.start_byte()..node.end_byte());
+                    if node_text.contains("\\") {
+                        self.add_diagnostic(Diagnostic {
                             range,
                             ..Scenario::BACKSLASHED_IDENTIFIER.into()
                         });
                     }
                 }
                 Rule::AmbiguousStringLiteral => {
-                    return Some(Diagnostic {
+                    self.add_diagnostic(Diagnostic {
                         range,
                         ..Scenario::AMBIGUOUS_STRING_LITERAL.into()
                     });
                 }
                 Rule::DeprecatedEqualOperator => {
-                    return Some(Diagnostic {
+                    self.add_diagnostic(Diagnostic {
                         range,
                         ..Scenario::DEPRECATED_EQUAL_OPERATOR.into()
                     });
                 }
                 Rule::UndocumentedCloseTag => {
-                    return Some(Diagnostic {
+                    self.add_diagnostic(Diagnostic {
                         range,
                         ..Scenario::UNDOCUMENTED_CLOSE_TAG.into()
                     });
                 }
                 Rule::ListBegin | Rule::SwitchBegin => {
-                    self.scope.push(rule);
+                    ctx.scope.push(rule);
                 }
                 Rule::ListClose | Rule::SwitchClose => {
-                    self.scope.pop();
+                    ctx.scope.pop();
                 }
-                Rule::BreakStmt => {
-                    if let Some(s) = self.scope.last()
-                        && *s == Rule::ListBegin
-                    {
-                        return Some(Diagnostic {
-                            range,
-                            ..Scenario::DEPRECATED_LIST_BREAK.into()
-                        });
-                    } else {
-                        return Some(Diagnostic {
-                            range,
-                            ..Scenario::UNEXPECTED_BREAK_STMT.into()
-                        });
+                Rule::BreakStmt => match ctx.scope.last() {
+                    Some(scope_rule) => {
+                        if *scope_rule == Rule::ListBegin {
+                            self.add_diagnostic(Diagnostic {
+                                range,
+                                ..Scenario::DEPRECATED_LIST_BREAK.into()
+                            })
+                        }
                     }
-                }
+                    None => self.add_diagnostic(Diagnostic {
+                        range,
+                        ..Scenario::UNEXPECTED_BREAK_STMT.into()
+                    }),
+                },
                 Rule::MacroNamespace => {
-                    if !analysis.macro_map.contains_key(snippet) {
-                        return Some(Diagnostic {
-                            range: utils::node_range(node),
-                            ..Scenario::UNDEFINED_MACRO.into()
-                        });
-                    }
+                    let node_text = doc.get_ranged_text(node.start_byte()..node.end_byte());
+                    let macro_call = Symbol {
+                        rule,
+                        start_byte: node.start_byte(),
+                        end_byte: node.end_byte(),
+                        range,
+                    };
+                    ctx.macro_call_map
+                        .entry(node_text)
+                        .and_modify(|macro_calls| macro_calls.push(macro_call))
+                        .or_insert(vec![macro_call]);
                 }
                 _ => {}
             }
         }
-        None
     }
 }
 
-impl AstAnalyzer for DiagnosticAnalyzer {
-    fn analyze_node(&mut self, node: &Node, source: &str, analysis: &mut Analysis) {
-        if let Some(diagnostic) = self.diagnos_node(node, source, analysis) {
-            analysis
-                .diagnostic
-                .full_document_diagnostic_report
-                .items
-                .push(diagnostic);
-        }
-    }
-}
-
-impl Diagnose for TextDocument {
+impl DiagnosticFeature for Reactor {
     async fn on_diagnostic(
         &self,
-        params: DocumentDiagnosticParams,
+        _: DocumentDiagnosticParams,
     ) -> jsonrpc::Result<DocumentDiagnosticReportResult> {
         // TODO: Unchanged support
-        let _ = params;
         Ok(DocumentDiagnosticReportResult::Report(
-            DocumentDiagnosticReport::Full(self.analyze_result.diagnostic.clone()),
+            DocumentDiagnosticReport::Full(self.get_analysis().get_analyzed_full_diagnostics()),
         ))
     }
 }

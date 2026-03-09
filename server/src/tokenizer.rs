@@ -20,9 +20,10 @@ use tree_sitter::{Node, Point, Range};
 use tree_sitter_freemarker::grammar::Rule;
 
 use crate::{
-    analysis::{Analysis, AstAnalyzer},
+    analysis::{Analysis, AnalysisContext, HighlightAnalysis},
     doc::TextDocument,
-    protocol::Tokenizer,
+    reactor::Reactor,
+    server::SemanticTokenFeature,
 };
 
 // NOTICE: We use "semantic-token-provider" to provide code highlighting, see below link
@@ -135,6 +136,7 @@ fn tokenize_from(node: &Node<'_>) -> Option<Token> {
             | Rule::ReturnBegin => Some(Token(TokenType::Keyword, range, None)),
             Rule::UndocumentedCloseTag => Some(Token(TokenType::Keyword, range, Some(DEPRECATED))),
             Rule::MacroBegin
+            | Rule::MacroCloseTag
             | Rule::MacroClose
             | Rule::MacroCallBegin
             | Rule::MacroCallEnd
@@ -154,7 +156,9 @@ fn tokenize_from(node: &Node<'_>) -> Option<Token> {
                 Some(Token(TokenType::Operator, range, Some(DEPRECATED)))
             }
             Rule::ParameterName => Some(Token(TokenType::Parameter, range, None)),
-            Rule::Variable | Rule::Identifier => Some(Token(TokenType::Variable, range, None)),
+            Rule::Variable | Rule::Identifier | Rule::MacroSpecs => {
+                Some(Token(TokenType::Variable, range, None))
+            }
             Rule::StringLiteral | Rule::ImportPath | Rule::AmbiguousStringLiteral => {
                 Some(Token(TokenType::String, range, None))
             }
@@ -191,70 +195,71 @@ pub fn semantic_token_capability() -> SemanticTokensServerCapabilities {
     })
 }
 
-pub struct SemanticTokenAnalyzer {
-    prev_start: Point,
+fn encode_semantic_token(
+    prev_start: &Point,
+    token_type: TokenType,
+    start: &Point,
+    length: usize,
+    modifiers: Option<Modifiers>,
+) -> SemanticToken {
+    // toxic encoding rule, see also:
+    // (https://github.com/microsoft/vscode-extension-samples/blob/5ae1f7787122812dcc84e37427ca90af5ee09f14/semantic-tokens-sample/vscode.proposed.d.ts#L71)
+    let delta_line = (start.row - prev_start.row) as u32;
+    let delta_start = match delta_line == 0 {
+        // `deltaStart`: token start character, relative to the previous token (relative to 0 or the previous token's start if they are on the same line)
+        true => start.column - prev_start.column,
+        false => start.column,
+    } as u32;
+    SemanticToken {
+        delta_line,
+        delta_start,
+        length: length as u32,
+        token_type: token_type as u32, // #[repr(u32)] makes token_type ranged from 0
+        token_modifiers_bitset: match modifiers {
+            Some(m) => m.0,
+            None => 0,
+        },
+    }
 }
 
-impl SemanticTokenAnalyzer {
-    pub fn new() -> Self {
-        SemanticTokenAnalyzer {
-            prev_start: Point::default(),
-        }
-    }
-
-    fn encode_semantic_token(
+impl HighlightAnalysis for Analysis {
+    fn analyze_semantic_highlight(
         &mut self,
-        token_type: TokenType,
-        start: &Point,
-        length: usize,
-        modifiers: Option<Modifiers>,
-    ) -> SemanticToken {
-        // toxic encoding rule, see also:
-        // (https://github.com/microsoft/vscode-extension-samples/blob/5ae1f7787122812dcc84e37427ca90af5ee09f14/semantic-tokens-sample/vscode.proposed.d.ts#L71)
-        let delta_line = (start.row - self.prev_start.row) as u32;
-        let delta_start = match delta_line == 0 {
-            // `deltaStart`: token start character, relative to the previous token (relative to 0 or the previous token's start if they are on the same line)
-            true => start.column - self.prev_start.column,
-            false => start.column,
-        } as u32;
-        SemanticToken {
-            delta_line,
-            delta_start,
-            length: length as u32,
-            token_type: token_type as u32, // #[repr(u32)] makes token_type ranged from 0
-            token_modifiers_bitset: match modifiers {
-                Some(m) => m.0,
-                None => 0,
-            },
+        node: &Node,
+        doc: &TextDocument,
+        ctx: &mut AnalysisContext,
+    ) {
+        //let source = self.doc.rope.to_string();
+        if node.is_error() || node.is_missing() {
+            // not sure if it is proper
+            return;
         }
-    }
-
-    #[allow(non_snake_case)]
-    fn emit_semantic_tokens(&mut self, node: &Node, source: &str) -> Vec<SemanticToken> {
         let mut semantic_tokens = vec![];
         if let Some(token) = tokenize_from(node) {
             let Token(token_type, range, modifiers) = token;
             if range.end_point.row == range.start_point.row {
-                semantic_tokens.push(self.encode_semantic_token(
+                // single-line token
+                semantic_tokens.push(encode_semantic_token(
+                    &ctx.prev_start,
                     token_type,
                     &range.start_point,
                     range.end_byte - range.start_byte,
                     modifiers,
                 ));
-                self.prev_start = range.start_point;
+                ctx.prev_start = range.start_point;
             } else {
                 // multi-line token is not allowed, so split which into multiple inline tokens
-                let mut line_iter = source.lines();
                 // token of 1st line
                 let first_start = range.start_point;
-                let first_line = line_iter.nth(first_start.row).unwrap();
-                semantic_tokens.push(self.encode_semantic_token(
+                let first_line_len = doc.line_len(first_start.row).unwrap();
+                semantic_tokens.push(encode_semantic_token(
+                    &ctx.prev_start,
                     token_type,
                     &first_start,
-                    first_line.len(),
+                    first_line_len,
                     modifiers,
                 ));
-                self.prev_start = first_start;
+                ctx.prev_start = first_start;
                 // tokens from 2nd to last-1 line
                 let mut next_row = first_start.row + 1;
                 while next_row < range.end_point.row {
@@ -262,48 +267,37 @@ impl SemanticTokenAnalyzer {
                         row: next_row,
                         column: 0,
                     };
-                    let next_line = line_iter.next().unwrap();
-                    semantic_tokens.push(self.encode_semantic_token(
+                    let next_line_len = doc.line_len(next_row).unwrap();
+                    semantic_tokens.push(encode_semantic_token(
+                        &ctx.prev_start,
                         token_type,
                         &next_start,
-                        next_line.len(),
+                        next_line_len,
                         modifiers,
                     ));
                     next_row += 1;
-                    self.prev_start = next_start;
+                    ctx.prev_start = next_start;
                 }
                 // token of last line
                 let last_start = Point {
                     row: range.end_point.row,
                     column: 0,
                 };
-                semantic_tokens.push(self.encode_semantic_token(
+                semantic_tokens.push(encode_semantic_token(
+                    &ctx.prev_start,
                     token_type,
                     &last_start,
                     range.end_point.column,
                     modifiers,
                 ));
-                self.prev_start = last_start;
+                ctx.prev_start = last_start;
             }
         }
-        semantic_tokens
+        self.add_semantic_tokens(semantic_tokens);
     }
 }
 
-impl AstAnalyzer for SemanticTokenAnalyzer {
-    fn analyze_node(&mut self, node: &Node, source: &str, analysis: &mut Analysis) {
-        let _ = source;
-        if node.is_error() || node.is_missing() {
-            // not sure if it is proper
-            return;
-        }
-        analysis
-            .tokens
-            .extend(self.emit_semantic_tokens(node, source));
-    }
-}
-
-impl Tokenizer for TextDocument {
+impl SemanticTokenFeature for Reactor {
     async fn on_semantic_tokens_full(
         &self,
         params: SemanticTokensParams,
@@ -311,7 +305,7 @@ impl Tokenizer for TextDocument {
         let _ = params;
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: Some(self.version.to_string()),
-            data: self.analyze_result.tokens.clone(),
+            data: self.get_analysis().get_analyzed_semantic_tokens(),
         })))
     }
 }
