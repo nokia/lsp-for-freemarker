@@ -9,3 +9,5 @@ license = "BSD-3-Clause"
 
 [profile.release]
 strip = true
+lto = true
+codegen-units = 1
