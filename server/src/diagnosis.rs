@@ -4,31 +4,26 @@
 
 use std::str::FromStr;
 
-use tower_lsp_server::{
-    jsonrpc,
-    ls_types::{
-        CodeDescription, Diagnostic, DiagnosticOptions, DiagnosticServerCapabilities,
-        DiagnosticSeverity, DocumentDiagnosticParams, DocumentDiagnosticReport,
-        DocumentDiagnosticReportResult, NumberOrString,
-    },
-};
-use tree_sitter::Node;
-use tree_sitter_freemarker::{
-    SEMANTICS, SYNTAX,
+use crate::{
+    consts::{SEMANTICS, SYNTAX},
     grammar::Rule,
     href::{
         COMPARISION_EXPRESSION, DIRECTIVE_ASSIGN, DIRECTIVE_IMPORT, DIRECTIVE_LIST_BREAK,
         TOPLEVEL_VARIABLE,
     },
 };
-
-use crate::{
-    analysis::{Analysis, AnalysisContext, DiagnosticAnalysis, Symbol},
-    doc::TextDocument,
-    reactor::Reactor,
-    server::DiagnosticFeature,
-    utils,
+use tower_lsp_server::{
+    jsonrpc,
+    ls_types::{
+        CodeDescription, Diagnostic, DiagnosticOptions, DiagnosticServerCapabilities,
+        DiagnosticSeverity, DocumentDiagnosticParams, DocumentDiagnosticReport,
+        DocumentDiagnosticReportResult, FullDocumentDiagnosticReport, NumberOrString,
+        RelatedFullDocumentDiagnosticReport,
+    },
 };
+use tree_sitter::Node;
+
+use crate::{document::Document, features::DiagnosticFeature, text::SourceText, utils};
 
 pub fn diagnostic_capability() -> DiagnosticServerCapabilities {
     DiagnosticServerCapabilities::Options(DiagnosticOptions {
@@ -64,25 +59,25 @@ impl Scenario {
         href: TOPLEVEL_VARIABLE,
     };
 
-    const AMBIGUOUS_STRING_LITERAL: Scenario = Scenario {
+    const STRING_LVALUE: Scenario = Scenario {
         severity: DiagnosticSeverity::WARNING,
-        code: "ambiguous_string_literal",
+        code: "string_lvalue",
         source: SYNTAX,
         message: "While using a string literal as an L-value is syntactically valid for <#assign> and <#local>, this practice is generally discouraged due to potential ambiguity and reduced maintainability.",
         href: DIRECTIVE_ASSIGN,
     };
 
-    const DEPRECATED_EQUAL_OPERATOR: Scenario = Scenario {
+    const LEGACY_EQUAL_OPERATOR: Scenario = Scenario {
         severity: DiagnosticSeverity::WARNING,
-        code: "deprecated_equal_operator",
+        code: "legacy_equal_operator",
         source: SYNTAX,
         message: "For equality checks in comparisons, use '=='. The single '=' operator is deprecated for this purpose.",
         href: COMPARISION_EXPRESSION,
     };
 
-    const UNDOCUMENTED_CLOSE_TAG: Scenario = Scenario {
+    const SELF_CLOSING_TAG: Scenario = Scenario {
         severity: DiagnosticSeverity::WARNING,
-        code: "undocumented_close_tag",
+        code: "self_closing_tag",
         source: SYNTAX,
         message: "For non-capture <#assign> directives, it is recommended to use '>' as the close tag. Using '/>' is undocumented and adds unnecessary characters.",
         href: DIRECTIVE_ASSIGN,
@@ -111,7 +106,10 @@ impl From<Scenario> for Diagnostic {
             severity: Some(s.severity),
             code: Some(NumberOrString::String(s.code.to_owned())),
             code_description: Some(CodeDescription {
-                href: s.href.parse().unwrap(),
+                href: s
+                    .href
+                    .parse()
+                    .expect("static scenario href must be a valid url"),
             }),
             source: Some(s.source.to_owned()),
             message: s.message.to_owned(),
@@ -120,19 +118,23 @@ impl From<Scenario> for Diagnostic {
     }
 }
 
-impl DiagnosticAnalysis for Analysis {
-    fn analyze_diagnostic_report(
-        &mut self,
+/// Computes the syntax-level diagnostics by walking the tree once. Semantic
+/// (cross-referencing) diagnostics come from the [`crate::semantic::SemanticModel`].
+pub(crate) fn syntax_diagnostics(doc: &Document) -> Vec<Diagnostic> {
+    let source = doc.source();
+    let tree = doc.tree();
+    fn collect(
+        source: &SourceText,
         node: &Node,
-        doc: &TextDocument,
-        ctx: &mut AnalysisContext,
+        scope: &mut Vec<Rule>,
+        diagnostics: &mut Vec<Diagnostic>,
     ) {
         let node_kind = node.kind();
         let range = utils::parser_node_to_document_range(node);
         // TODO: maybe use tree-sitter query in the future
         if node.is_missing() {
             // TODO : maybe use query in the future
-            self.add_diagnostic(Diagnostic {
+            diagnostics.push(Diagnostic {
                 range,
                 severity: Some(DiagnosticSeverity::ERROR),
                 source: Some(SYNTAX.to_owned()),
@@ -142,8 +144,8 @@ impl DiagnosticAnalysis for Analysis {
         }
 
         if node.is_error() {
-            let node_text = doc.get_ranged_text(node.start_byte()..node.end_byte());
-            self.add_diagnostic(Diagnostic {
+            let node_text = source.get_ranged_text(node.start_byte()..node.end_byte());
+            diagnostics.push(Diagnostic {
                 range,
                 severity: Some(DiagnosticSeverity::ERROR),
                 source: Some(SYNTAX.to_owned()),
@@ -155,79 +157,84 @@ impl DiagnosticAnalysis for Analysis {
         if let Ok(rule) = Rule::from_str(node_kind) {
             match rule {
                 Rule::Identifier => {
-                    let node_text = doc.get_ranged_text(node.start_byte()..node.end_byte());
+                    let node_text = source.get_ranged_text(node.start_byte()..node.end_byte());
                     if node_text.contains("\\") {
-                        self.add_diagnostic(Diagnostic {
+                        diagnostics.push(Diagnostic {
                             range,
                             ..Scenario::BACKSLASHED_IDENTIFIER.into()
                         });
                     }
                 }
-                Rule::AmbiguousStringLiteral => {
-                    self.add_diagnostic(Diagnostic {
+                Rule::StringLvalue => {
+                    diagnostics.push(Diagnostic {
                         range,
-                        ..Scenario::AMBIGUOUS_STRING_LITERAL.into()
+                        ..Scenario::STRING_LVALUE.into()
                     });
                 }
-                Rule::DeprecatedEqualOperator => {
-                    self.add_diagnostic(Diagnostic {
+                Rule::LegacyEqualOperator => {
+                    diagnostics.push(Diagnostic {
                         range,
-                        ..Scenario::DEPRECATED_EQUAL_OPERATOR.into()
+                        ..Scenario::LEGACY_EQUAL_OPERATOR.into()
                     });
                 }
-                Rule::UndocumentedCloseTag => {
-                    self.add_diagnostic(Diagnostic {
+                Rule::SelfClosingTag => {
+                    diagnostics.push(Diagnostic {
                         range,
-                        ..Scenario::UNDOCUMENTED_CLOSE_TAG.into()
+                        ..Scenario::SELF_CLOSING_TAG.into()
                     });
                 }
                 Rule::ListBegin | Rule::SwitchBegin => {
-                    ctx.scope.push(rule);
+                    scope.push(rule);
                 }
                 Rule::ListClose | Rule::SwitchClose => {
-                    ctx.scope.pop();
+                    scope.pop();
                 }
-                Rule::BreakStmt => match ctx.scope.last() {
+                Rule::BreakStmt => match scope.last() {
                     Some(scope_rule) => {
                         if *scope_rule == Rule::ListBegin {
-                            self.add_diagnostic(Diagnostic {
+                            diagnostics.push(Diagnostic {
                                 range,
                                 ..Scenario::DEPRECATED_LIST_BREAK.into()
                             })
                         }
                     }
-                    None => self.add_diagnostic(Diagnostic {
+                    None => diagnostics.push(Diagnostic {
                         range,
                         ..Scenario::UNEXPECTED_BREAK_STMT.into()
                     }),
                 },
-                Rule::MacroNamespace => {
-                    let node_text = doc.get_ranged_text(node.start_byte()..node.end_byte());
-                    let macro_call = Symbol {
-                        rule,
-                        start_byte: node.start_byte(),
-                        end_byte: node.end_byte(),
-                        range,
-                    };
-                    ctx.macro_call_map
-                        .entry(node_text)
-                        .and_modify(|macro_calls| macro_calls.push(macro_call))
-                        .or_insert(vec![macro_call]);
-                }
                 _ => {}
             }
         }
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i as u32) {
+                collect(source, &child, scope, diagnostics);
+            }
+        }
     }
+
+    let mut diagnostics = Vec::new();
+    let mut scope = Vec::new();
+    collect(source, &tree.root_node(), &mut scope, &mut diagnostics);
+    diagnostics
 }
 
-impl DiagnosticFeature for Reactor {
+impl DiagnosticFeature for Document {
     async fn on_diagnostic(
         &self,
         _: DocumentDiagnosticParams,
     ) -> jsonrpc::Result<DocumentDiagnosticReportResult> {
         // TODO: Unchanged support
+        let mut items = syntax_diagnostics(self);
+        items.extend(self.semantic().diagnostics().iter().cloned());
         Ok(DocumentDiagnosticReportResult::Report(
-            DocumentDiagnosticReport::Full(self.get_analysis().get_analyzed_full_diagnostics()),
+            DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
+                full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                    result_id: None,
+                    items,
+                },
+                ..Default::default()
+            }),
         ))
     }
 }

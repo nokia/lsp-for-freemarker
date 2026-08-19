@@ -8,23 +8,25 @@
 use tower_lsp_server::LspService;
 
 mod action;
-mod analysis;
 mod client;
 mod completion;
+mod consts;
 mod diagnosis;
-mod doc;
+mod document;
+mod features;
 mod folding;
 mod format;
 mod goto;
+mod grammar;
 mod hover;
+mod href;
 mod init;
-mod parser;
-mod reactor;
+mod semantic;
 mod server;
-mod symbol;
+mod syntax;
+mod text;
 mod tokenizer;
 mod utils;
-mod workspace;
 
 #[tokio::main]
 async fn main() {

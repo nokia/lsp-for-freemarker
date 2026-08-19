@@ -1,0 +1,483 @@
+// Copyright 2025-2026 Nokia
+// Licensed under the BSD 3-Clause License.
+// SPDX-License-Identifier: BSD-3-Clause
+
+use strum_macros::{Display, EnumIter, EnumString, IntoStaticStr};
+
+#[derive(Clone, Copy, Debug, Display, EnumString, IntoStaticStr, PartialEq)]
+pub enum Rule {
+    #[strum(serialize = "assign_clause")]
+    AssignClause,
+    #[strum(serialize = "assign_expression")]
+    AssignExpression,
+    #[strum(serialize = "assign_inline")]
+    AssignInline,
+    #[strum(serialize = "assign_stmt")]
+    AssignStmt,
+    #[strum(serialize = "binary_expression")]
+    BinaryExpression,
+    #[strum(serialize = "break_stmt")]
+    BreakStmt,
+    #[strum(serialize = "builtin_call")]
+    BuiltinCall,
+    #[strum(serialize = "builtin_for_boolean")]
+    BuiltinForBoolean,
+    #[strum(serialize = "builtin_for_expert")]
+    BuiltinForExpert,
+    #[strum(serialize = "builtin_for_hash")]
+    BuiltinForHash,
+    #[strum(serialize = "builtin_for_number")]
+    BuiltinForNumber,
+    #[strum(serialize = "builtin_for_sequence")]
+    BuiltinForSequence,
+    #[strum(serialize = "builtin_for_string")]
+    BuiltinForString,
+    #[strum(serialize = "call_expression")]
+    CallExpression,
+    #[strum(serialize = "case_clause")]
+    CaseClause,
+    #[strum(serialize = "continue_stmt")]
+    ContinueStmt,
+    #[strum(serialize = "default_clause")]
+    DefaultClause,
+    #[strum(serialize = "directive")]
+    Directive,
+    #[strum(serialize = "else_clause")]
+    ElseClause,
+    #[strum(serialize = "elseif_clause")]
+    ElseifClause,
+    #[strum(serialize = "ftl_parameter")]
+    FtlParameter,
+    #[strum(serialize = "ftl_stmt")]
+    FtlStmt,
+    #[strum(serialize = "function_clause")]
+    FunctionClause,
+    #[strum(serialize = "function_name")]
+    FunctionName,
+    #[strum(serialize = "function_stmt")]
+    FunctionStmt,
+    #[strum(serialize = "hash")]
+    Hash,
+    #[strum(serialize = "if_clause")]
+    IfClause,
+    #[strum(serialize = "if_stmt")]
+    IfStmt,
+    #[strum(serialize = "import_path")]
+    ImportPath,
+    #[strum(serialize = "import_stmt")]
+    ImportStmt,
+    #[strum(serialize = "interpolation")]
+    Interpolation,
+    #[strum(serialize = "items_clause")]
+    ItemsClause,
+    #[strum(serialize = "items_stmt")]
+    ItemsStmt,
+    #[strum(serialize = "list_clause")]
+    ListClause,
+    #[strum(serialize = "list_stmt")]
+    ListStmt,
+    #[strum(serialize = "local_clause")]
+    LocalClause,
+    #[strum(serialize = "local_inline")]
+    LocalInline,
+    #[strum(serialize = "local_stmt")]
+    LocalStmt,
+    #[strum(serialize = "macro_call")]
+    MacroCall,
+    #[strum(serialize = "macro_clause")]
+    MacroClause,
+    #[strum(serialize = "macro_path")]
+    MacroPath,
+    #[strum(serialize = "macro_stmt")]
+    MacroStmt,
+    #[strum(serialize = "member_chain")]
+    MemberChain,
+    #[strum(serialize = "member_expression")]
+    MemberExpression,
+    #[strum(serialize = "missing_value_expression")]
+    MissingValueExpression,
+    #[strum(serialize = "on_clause")]
+    OnClause,
+    #[strum(serialize = "pair")]
+    Pair,
+    #[strum(serialize = "parenthesized_expression")]
+    ParenthesizedExpression,
+    #[strum(serialize = "property_identifier")]
+    PropertyIdentifier,
+    #[strum(serialize = "return_stmt")]
+    ReturnStmt,
+    #[strum(serialize = "sep_directive")]
+    SepDirective,
+    #[strum(serialize = "sequence")]
+    Sequence,
+    #[strum(serialize = "source_file")]
+    SourceFile,
+    #[strum(serialize = "string_literal")]
+    StringLiteral,
+    #[strum(serialize = "string_lvalue")]
+    StringLvalue,
+    #[strum(serialize = "subscript_expression")]
+    SubscriptExpression,
+    #[strum(serialize = "switch_clause")]
+    SwitchClause,
+    #[strum(serialize = "switch_stmt")]
+    SwitchStmt,
+    #[strum(serialize = "text")]
+    Text,
+    #[strum(serialize = "unary_expression")]
+    UnaryExpression,
+    #[strum(serialize = "variable")]
+    Variable,
+    #[strum(serialize = "assign_begin")]
+    AssignBegin,
+    #[strum(serialize = "assign_close")]
+    AssignClose,
+    #[strum(serialize = "assign_operator")]
+    AssignOperator,
+    #[strum(serialize = "binary_operator")]
+    BinaryOperator,
+    #[strum(serialize = "boolean_false")]
+    BooleanFalse,
+    #[strum(serialize = "boolean_true")]
+    BooleanTrue,
+    #[strum(serialize = "builtin_name")]
+    BuiltinName,
+    #[strum(serialize = "case_begin")]
+    CaseBegin,
+    #[strum(serialize = "close_tag")]
+    CloseTag,
+    #[strum(serialize = "comment")]
+    Comment,
+    #[strum(serialize = "default_begin")]
+    DefaultBegin,
+    #[strum(serialize = "else_begin")]
+    ElseBegin,
+    #[strum(serialize = "elseif_begin")]
+    ElseifBegin,
+    #[strum(serialize = "equal_operator")]
+    EqualOperator,
+    #[strum(serialize = "ftl_begin")]
+    FtlBegin,
+    #[strum(serialize = "function_begin")]
+    FunctionBegin,
+    #[strum(serialize = "function_close")]
+    FunctionClose,
+    #[strum(serialize = "greater_than_equal_operator")]
+    GreaterThanEqualOperator,
+    #[strum(serialize = "greater_than_operator")]
+    GreaterThanOperator,
+    #[strum(serialize = "identifier")]
+    Identifier,
+    #[strum(serialize = "if_begin")]
+    IfBegin,
+    #[strum(serialize = "if_close")]
+    IfClose,
+    #[strum(serialize = "import_alias")]
+    ImportAlias,
+    #[strum(serialize = "import_begin")]
+    ImportBegin,
+    #[strum(serialize = "interpolation_start")]
+    InterpolationStart,
+    #[strum(serialize = "items_begin")]
+    ItemsBegin,
+    #[strum(serialize = "items_close")]
+    ItemsClose,
+    #[strum(serialize = "keyword_as")]
+    KeywordAs,
+    #[strum(serialize = "legacy_equal_operator")]
+    LegacyEqualOperator,
+    #[strum(serialize = "list_begin")]
+    ListBegin,
+    #[strum(serialize = "list_close")]
+    ListClose,
+    #[strum(serialize = "local_begin")]
+    LocalBegin,
+    #[strum(serialize = "local_close")]
+    LocalClose,
+    #[strum(serialize = "macro_begin")]
+    MacroBegin,
+    #[strum(serialize = "macro_call_begin")]
+    MacroCallBegin,
+    #[strum(serialize = "macro_call_end")]
+    MacroCallEnd,
+    #[strum(serialize = "macro_close")]
+    MacroClose,
+    #[strum(serialize = "macro_close_tag")]
+    MacroCloseTag,
+    #[strum(serialize = "macro_name")]
+    MacroName,
+    #[strum(serialize = "macro_namespace")]
+    MacroNamespace,
+    #[strum(serialize = "minus_operator")]
+    MinusOperator,
+    #[strum(serialize = "missing_value_operator")]
+    MissingValueOperator,
+    #[strum(serialize = "not_operator")]
+    NotOperator,
+    #[strum(serialize = "number")]
+    Number,
+    #[strum(serialize = "on_begin")]
+    OnBegin,
+    #[strum(serialize = "parameter_name")]
+    ParameterName,
+    #[strum(serialize = "plus_operator")]
+    PlusOperator,
+    #[strum(serialize = "return_begin")]
+    ReturnBegin,
+    #[strum(serialize = "self_closing_tag")]
+    SelfClosingTag,
+    #[strum(serialize = "sep_begin")]
+    SepBegin,
+    #[strum(serialize = "sep_close")]
+    SepClose,
+    #[strum(serialize = "switch_begin")]
+    SwitchBegin,
+    #[strum(serialize = "switch_close")]
+    SwitchClose,
+}
+
+#[derive(Clone, Copy, Debug, Display, EnumIter, EnumString, IntoStaticStr, PartialEq)]
+pub enum Builtin {
+    #[strum(serialize = "abs")]
+    Abs,
+    #[strum(serialize = "absolute_template_name")]
+    AbsoluteTemplateName,
+    #[strum(serialize = "api")]
+    Api,
+    #[strum(serialize = "blank_to_null")]
+    BlankToNull,
+    #[strum(serialize = "boolean")]
+    Boolean,
+    #[strum(serialize = "byte")]
+    Byte,
+    #[strum(serialize = "c")]
+    C,
+    #[strum(serialize = "c_lower_case")]
+    CLowerCase,
+    #[strum(serialize = "c_upper_case")]
+    CUpperCase,
+    #[strum(serialize = "cap_first")]
+    CapFirst,
+    #[strum(serialize = "capitalize")]
+    Capitalize,
+    #[strum(serialize = "ceiling")]
+    Ceiling,
+    #[strum(serialize = "chop_linebreak")]
+    ChopLinebreak,
+    #[strum(serialize = "chunk")]
+    Chunk,
+    #[strum(serialize = "cn")]
+    Cn,
+    #[strum(serialize = "contains")]
+    Contains,
+    #[strum(serialize = "date")]
+    Date,
+    #[strum(serialize = "datetime")]
+    Datetime,
+    #[strum(serialize = "double")]
+    Double,
+    #[strum(serialize = "drop_while")]
+    DropWhile,
+    #[strum(serialize = "empty_to_null")]
+    EmptyToNull,
+    #[strum(serialize = "ends_with")]
+    EndsWith,
+    #[strum(serialize = "ensure_ends_with")]
+    EnsureEndsWith,
+    #[strum(serialize = "ensure_starts_with")]
+    EnsureStartsWith,
+    #[strum(serialize = "esc")]
+    Esc,
+    #[strum(serialize = "eval")]
+    Eval,
+    #[strum(serialize = "eval_json")]
+    EvalJson,
+    #[strum(serialize = "filter")]
+    Filter,
+    #[strum(serialize = "first")]
+    First,
+    #[strum(serialize = "float")]
+    Float,
+    #[strum(serialize = "floor")]
+    Floor,
+    #[strum(serialize = "groups")]
+    Groups,
+    #[strum(serialize = "has_api")]
+    HasApi,
+    #[strum(serialize = "has_content")]
+    HasContent,
+    #[strum(serialize = "index_of")]
+    IndexOf,
+    #[strum(serialize = "int")]
+    Int,
+    #[strum(serialize = "interpret")]
+    Interpret,
+    #[strum(serialize = "is_boolean")]
+    IsBoolean,
+    #[strum(serialize = "is_collection")]
+    IsCollection,
+    #[strum(serialize = "is_collection_ex")]
+    IsCollectionEx,
+    #[strum(serialize = "is_date")]
+    IsDate,
+    #[strum(serialize = "is_date_like")]
+    IsDateLike,
+    #[strum(serialize = "is_date_only")]
+    IsDateOnly,
+    #[strum(serialize = "is_datetime")]
+    IsDatetime,
+    #[strum(serialize = "is_directive")]
+    IsDirective,
+    #[strum(serialize = "is_enumerable")]
+    IsEnumerable,
+    #[strum(serialize = "is_hash")]
+    IsHash,
+    #[strum(serialize = "is_hash_ex")]
+    IsHashEx,
+    #[strum(serialize = "is_indexable")]
+    IsIndexable,
+    #[strum(serialize = "is_infinite")]
+    IsInfinite,
+    #[strum(serialize = "is_macro")]
+    IsMacro,
+    #[strum(serialize = "is_markup_output")]
+    IsMarkupOutput,
+    #[strum(serialize = "is_method")]
+    IsMethod,
+    #[strum(serialize = "is_nan")]
+    IsNan,
+    #[strum(serialize = "is_node")]
+    IsNode,
+    #[strum(serialize = "is_number")]
+    IsNumber,
+    #[strum(serialize = "is_sequence")]
+    IsSequence,
+    #[strum(serialize = "is_string")]
+    IsString,
+    #[strum(serialize = "is_time")]
+    IsTime,
+    #[strum(serialize = "is_transform")]
+    IsTransform,
+    #[strum(serialize = "is_unknown_date_like")]
+    IsUnknownDateLike,
+    #[strum(serialize = "j_string")]
+    JString,
+    #[strum(serialize = "join")]
+    Join,
+    #[strum(serialize = "js_string")]
+    JsString,
+    #[strum(serialize = "json_string")]
+    JsonString,
+    #[strum(serialize = "keep_after")]
+    KeepAfter,
+    #[strum(serialize = "keep_after_last")]
+    KeepAfterLast,
+    #[strum(serialize = "keep_before")]
+    KeepBefore,
+    #[strum(serialize = "keep_before_last")]
+    KeepBeforeLast,
+    #[strum(serialize = "keys")]
+    Keys,
+    #[strum(serialize = "last")]
+    Last,
+    #[strum(serialize = "last_index_of")]
+    LastIndexOf,
+    #[strum(serialize = "left_pad")]
+    LeftPad,
+    #[strum(serialize = "length")]
+    Length,
+    #[strum(serialize = "long")]
+    Long,
+    #[strum(serialize = "lower_abc")]
+    LowerAbc,
+    #[strum(serialize = "lower_case")]
+    LowerCase,
+    #[strum(serialize = "map")]
+    Map,
+    #[strum(serialize = "markup_string")]
+    MarkupString,
+    #[strum(serialize = "matches")]
+    Matches,
+    #[strum(serialize = "max")]
+    Max,
+    #[strum(serialize = "min")]
+    Min,
+    #[strum(serialize = "namespace")]
+    Namespace,
+    #[strum(serialize = "new")]
+    New,
+    #[strum(serialize = "no_esc")]
+    NoEsc,
+    #[strum(serialize = "number")]
+    Number,
+    #[strum(serialize = "number_to_date")]
+    NumberToDate,
+    #[strum(serialize = "number_to_datetime")]
+    NumberToDatetime,
+    #[strum(serialize = "number_to_time")]
+    NumberToTime,
+    #[strum(serialize = "remove_beginning")]
+    RemoveBeginning,
+    #[strum(serialize = "remove_ending")]
+    RemoveEnding,
+    #[strum(serialize = "replace")]
+    Replace,
+    #[strum(serialize = "reverse")]
+    Reverse,
+    #[strum(serialize = "right_pad")]
+    RightPad,
+    #[strum(serialize = "round")]
+    Round,
+    #[strum(serialize = "seq_contains")]
+    SeqContains,
+    #[strum(serialize = "seq_index_of")]
+    SeqIndexOf,
+    #[strum(serialize = "seq_last_index_of")]
+    SeqLastIndexOf,
+    #[strum(serialize = "sequence")]
+    Sequence,
+    #[strum(serialize = "short")]
+    Short,
+    #[strum(serialize = "size")]
+    Size,
+    #[strum(serialize = "sort")]
+    Sort,
+    #[strum(serialize = "sort_by")]
+    SortBy,
+    #[strum(serialize = "split")]
+    Split,
+    #[strum(serialize = "starts_with")]
+    StartsWith,
+    #[strum(serialize = "string")]
+    String,
+    #[strum(serialize = "take_while")]
+    TakeWhile,
+    #[strum(serialize = "then")]
+    Then,
+    #[strum(serialize = "time")]
+    Time,
+    #[strum(serialize = "trim")]
+    Trim,
+    #[strum(serialize = "trim_to_null")]
+    TrimToNull,
+    #[strum(serialize = "truncate")]
+    Truncate,
+    #[strum(serialize = "uncap_first")]
+    UncapFirst,
+    #[strum(serialize = "upper_abc")]
+    UpperAbc,
+    #[strum(serialize = "upper_case")]
+    UpperCase,
+    #[strum(serialize = "url")]
+    Url,
+    #[strum(serialize = "url_path")]
+    UrlPath,
+    #[strum(serialize = "values")]
+    Values,
+    #[strum(serialize = "with_args")]
+    WithArgs,
+    #[strum(serialize = "with_args_last")]
+    WithArgsLast,
+    #[strum(serialize = "word_list")]
+    WordList,
+}

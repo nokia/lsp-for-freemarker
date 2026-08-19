@@ -6,10 +6,9 @@
 
 ## Introduction
 
-The *lsp-for-freemarker* project consists of 3 parts.
+The *lsp-for-freemarker* project consists of 2 parts.
 
 + A `server` application implemented in *rust*.
-+ A `parser` library implemented by *tree-sitter*.
 + Some `clients` for different editors.
 
 ## Project Status

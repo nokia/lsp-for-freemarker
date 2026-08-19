@@ -11,9 +11,9 @@ use tower_lsp_server::{
     },
 };
 
-use tree_sitter_freemarker::grammar::Rule;
+use crate::grammar::Rule;
 
-use crate::{reactor::Reactor, server::ActionFeature};
+use crate::{document::Document, features::ActionFeature};
 
 #[allow(clippy::mutable_key_type)]
 fn create_fix_warning_action(
@@ -21,18 +21,15 @@ fn create_fix_warning_action(
     uri: &Uri,
     diagnostic: Diagnostic,
 ) -> Option<CodeActionOrCommand> {
-    let rule = Rule::from_str(code.as_str());
-    if rule.is_err() {
-        return None;
-    }
     // The TextEdit describes replacing the diagnostic's range with the correct text
+    let new_text = match Rule::from_str(code.as_str()) {
+        Ok(Rule::LegacyEqualOperator) => "==".to_string(),
+        Ok(Rule::SelfClosingTag) => ">".to_string(),
+        _ => return None,
+    };
     let text_edit = TextEdit {
         range: diagnostic.range,
-        new_text: match rule.unwrap() {
-            Rule::DeprecatedEqualOperator => "==".to_string(),
-            Rule::UndocumentedCloseTag => ">".to_string(),
-            _ => return None,
-        },
+        new_text,
     };
 
     Some(CodeActionOrCommand::CodeAction(CodeAction {
@@ -55,7 +52,7 @@ pub fn code_action_capability() -> CodeActionProviderCapability {
     })
 }
 
-impl ActionFeature for Reactor {
+impl ActionFeature for Document {
     async fn on_code_action(
         &self,
         params: CodeActionParams,

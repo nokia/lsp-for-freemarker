@@ -3,17 +3,15 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 use tower_lsp_server::ls_types::{
-    FileOperationFilter, FileOperationPattern, FileOperationRegistrationOptions, InitializeParams,
-    InitializeResult, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
-    TextDocumentSyncKind, WorkspaceFileOperationsServerCapabilities, WorkspaceServerCapabilities,
+    FileOperationFilter, FileOperationPattern, FileOperationRegistrationOptions, InitializeResult,
+    ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind,
+    WorkspaceFileOperationsServerCapabilities, WorkspaceServerCapabilities,
 };
 
-use crate::server::{Initializer, Server};
-use crate::{
-    action, completion, diagnosis, folding, format, goto, hover, tokenizer, window_log_info,
-};
+use crate::server::Server;
+use crate::{action, completion, diagnosis, folding, format, goto, hover, tokenizer};
 
-fn do_initialize() -> InitializeResult {
+pub(crate) fn do_initialize() -> InitializeResult {
     InitializeResult {
         capabilities: ServerCapabilities {
             text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -49,16 +47,5 @@ fn do_initialize() -> InitializeResult {
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
         }),
         ..Default::default()
-    }
-}
-
-impl Initializer for Server {
-    #[allow(deprecated)]
-    async fn on_initialize(&self, params: InitializeParams) -> InitializeResult {
-        window_log_info!("[Server] initializing...");
-        if let Ok(mut root_path) = self.root_path.try_write() {
-            root_path.clone_from(&params.root_path.unwrap_or_default());
-        }
-        do_initialize()
     }
 }

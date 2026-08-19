@@ -10,7 +10,7 @@ use tower_lsp_server::{
 };
 use tree_sitter::Point;
 
-use crate::{reactor::Reactor, server::FormatFeature, window_log_info};
+use crate::{client::Window, document::Document, features::FormatFeature, info};
 
 #[derive(Clone, Copy)]
 struct FormatState {
@@ -27,7 +27,7 @@ fn reset_state(mut state: FormatState) -> FormatState {
 }
 
 fn update_state(
-    reactor: &Reactor,
+    document: &Document,
     index: usize,
     line: &str,
     mut state: FormatState,
@@ -35,13 +35,12 @@ fn update_state(
     let trimed_line = line.trim_start();
     if trimed_line.starts_with("</#") || trimed_line.starts_with("<#") {
         let col = line.len() - trimed_line.len();
-        let node = reactor
-            .get_parser()
-            .get_node_at_point(Point {
-                row: index,
-                column: col,
-            })
-            .unwrap();
+        let Some(node) = document.tree().node_at(Point {
+            row: index,
+            column: col,
+        }) else {
+            return state;
+        };
         if node.kind() == "comment" {
             // under comment section
             state.has_directive = false;
@@ -83,13 +82,13 @@ pub fn formatting_capability() -> OneOf<bool, DocumentFormattingOptions> {
     OneOf::Left(true)
 }
 
-impl FormatFeature for Reactor {
+impl FormatFeature for Document {
     async fn on_formatting(
         &self,
         params: DocumentFormattingParams,
     ) -> JsonRpcResult<Option<Vec<TextEdit>>> {
         let uri = params.text_document.uri;
-        window_log_info!(format!("on_formatting: {}", uri.to_string()));
+        Window::log(info!(format!("on_formatting: {}", uri.to_string()))).await;
         let mut state = FormatState {
             preset: None,
             indent: 0,
@@ -97,8 +96,8 @@ impl FormatFeature for Reactor {
         };
         let mut formatted = String::from("");
         let mut last_length = 0;
-        let line_count = self.get_document().line_count();
-        self.get_document().enumerate_lines(|index, line| {
+        let line_count = self.source().line_count();
+        self.source().enumerate_lines(|index, line| {
             last_length = line.len();
             state = update_state(self, index, line, state);
             let preset = state.preset.unwrap_or_default();

@@ -21,10 +21,6 @@ jobs:
         with:
           filters: |
             any:
-              - 'parser/tree-sitter-freemarker/grammar.js'
-              - 'parser/tree-sitter-freemarker/Cargo.toml'
-              - 'parser/tree-sitter-freemarker/bindings/rust/**'
-              - 'parser/tree-sitter-freemarker/src/**'
               - 'server/Cargo.toml'
               - 'server/src/**'
               - 'server/assets/**'
@@ -69,10 +65,6 @@ jobs:
         with:
           filters: |
             any:
-              - 'parser/tree-sitter-freemarker/grammar.js'
-              - 'parser/tree-sitter-freemarker/Cargo.toml'
-              - 'parser/tree-sitter-freemarker/bindings/rust/**'
-              - 'parser/tree-sitter-freemarker/src/**'
               - 'server/Cargo.toml'
               - 'server/src/**'
               - 'server/assets/**'

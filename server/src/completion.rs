@@ -11,14 +11,14 @@ use tower_lsp_server::{
     },
 };
 
-use once_cell::sync::Lazy;
+use crate::grammar::{Builtin, Rule};
 use rust_embed::Embed;
 use serde::Deserialize;
+use std::sync::LazyLock;
 use strum::IntoEnumIterator;
-use tree_sitter_freemarker::grammar::{Builtin, Rule};
 
-use crate::reactor::Reactor;
-use crate::server::CompletionFeature;
+use crate::document::Document;
+use crate::features::CompletionFeature;
 
 #[derive(Embed)]
 #[folder = "assets/completion"]
@@ -109,7 +109,7 @@ impl CompletionAsset {
     }
 }
 
-static STATIC_ASSETS: Lazy<CompletionAsset> = Lazy::new(CompletionAsset::new);
+static STATIC_ASSETS: LazyLock<CompletionAsset> = LazyLock::new(CompletionAsset::new);
 
 fn completion_for_builtin() -> Vec<CompletionItem> {
     // todo: improve filter result by partial identifier
@@ -138,10 +138,10 @@ pub fn completion_capability() -> CompletionOptions {
     }
 }
 
-impl CompletionFeature for Reactor {
+impl CompletionFeature for Document {
     fn list_macro_definitions(&self) -> Vec<CompletionItem> {
         let mut macro_definitions = vec![];
-        self.get_analysis().foreach_symbol(|symbol_name, symbols| {
+        self.semantic().foreach_symbol(|symbol_name, symbols| {
             let first_definition = symbols[0];
             if matches!(first_definition.rule, Rule::MacroName | Rule::ImportAlias) {
                 macro_definitions.push(CompletionItem {
@@ -150,7 +150,7 @@ impl CompletionFeature for Reactor {
                     documentation: Some(Documentation::MarkupContent(MarkupContent {
                         kind: MarkupKind::Markdown,
                         value: self
-                            .get_document()
+                            .source()
                             .get_ranged_text(first_definition.start_byte..first_definition.end_byte)
                             .to_string(),
                     })),
@@ -168,27 +168,25 @@ impl CompletionFeature for Reactor {
         &self,
         params: CompletionParams,
     ) -> JsonRpcResult<Option<CompletionResponse>> {
-        if params
-            .context
-            .as_ref()
-            .is_none_or(|ctx| ctx.trigger_character.is_none())
-        {
+        // Completion is only provided after an explicit trigger character.
+        let Some(ctx) = params.context.as_ref() else {
+            return Ok(None);
+        };
+        let Some(trigger) = ctx.trigger_character.as_ref() else {
+            return Ok(None);
+        };
+        // The position points to the char right after the trigger.
+        let position = params.text_document_position.position;
+        if position.character == 0 {
             return Ok(None);
         }
-        // the position has point to 1 char after trigger
-        let position = params.text_document_position.position;
-        assert!(position.character > 0);
         let trigger_position = Position {
             line: position.line,
             character: position.character - 1,
         };
-        let prev_char = self.get_document().get_prev_char_at(&trigger_position);
-        if prev_char.as_ref().is_none() {
+        let Some(prev_char) = self.source().get_prev_char_at(&trigger_position) else {
             return Ok(None);
-        }
-        let prev_char = prev_char.unwrap();
-        let ctx = params.context.unwrap();
-        let trigger = ctx.trigger_character.unwrap();
+        };
         let mut result: Option<CompletionResponse> = None;
 
         match trigger.as_str() {

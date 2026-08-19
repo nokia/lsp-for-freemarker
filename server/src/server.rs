@@ -2,80 +2,138 @@
 // Licensed under the BSD 3-Clause License.
 // SPDX-License-Identifier: BSD-3-Clause
 
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 
+use moka::future::Cache;
 use tokio::sync::RwLock;
 use tower_lsp_server::{
     Client, LanguageServer, jsonrpc,
     ls_types::{
-        CodeActionOrCommand, CodeActionParams, CompletionItem, CompletionParams,
-        CompletionResponse, DeleteFilesParams, DidChangeTextDocumentParams,
-        DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-        DocumentDiagnosticParams, DocumentDiagnosticReportResult, DocumentFormattingParams,
-        FoldingRange, FoldingRangeParams, GotoDefinitionParams, GotoDefinitionResponse, Hover,
-        HoverParams, InitializeParams, InitializeResult, InitializedParams, SemanticTokensParams,
-        SemanticTokensResult, TextEdit,
+        CodeActionOrCommand, CodeActionParams, CompletionParams, CompletionResponse,
+        DeleteFilesParams, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
+        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentDiagnosticParams,
+        DocumentDiagnosticReportResult, DocumentFormattingParams, FileChangeType, FoldingRange,
+        FoldingRangeParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+        InitializeParams, InitializeResult, InitializedParams, SemanticTokensParams,
+        SemanticTokensResult, TextEdit, Uri,
     },
 };
 
-use crate::{client::save_client, window_log_info, workspace::Workspace};
+use crate::{
+    client::{self, Window},
+    document::Document,
+    features::{
+        ActionFeature, CompletionFeature, DiagnosticFeature, FoldingFeature, FormatFeature,
+        GotoFeature, HoverFeature, SemanticTokenFeature,
+    },
+    info, init, warning,
+};
 
 #[derive(Debug)]
 pub struct Server {
-    pub(crate) root_path: Arc<RwLock<String>>,
-    pub(crate) workspace: Workspace,
+    documents: Cache<String, Arc<RwLock<Document>>>,
 }
 
 impl Server {
     pub const NAME: &str = "Freemarker Language Server";
 
     pub fn new(client: Client) -> Self {
-        let _ = save_client(client);
+        client::init(client);
         Self {
-            root_path: Arc::new(RwLock::new(String::new())),
-            workspace: Workspace::new(),
+            documents: Cache::new(64),
         }
+    }
+
+    /// Runs `func` against the document for `uri`, holding a read lock for the
+    /// duration of the call. Returns an internal error when the document is
+    /// not open.
+    async fn with_document<T>(
+        &self,
+        uri: &Uri,
+        func: impl AsyncFnOnce(&Document) -> jsonrpc::Result<T>,
+    ) -> jsonrpc::Result<T> {
+        let Some(document) = self.documents.get(&uri.to_string()).await else {
+            return Err(jsonrpc::Error::internal_error());
+        };
+        let guard = document.read().await;
+        func(&guard).await
     }
 }
 
-pub trait Initializer {
-    async fn on_initialize(&self, params: InitializeParams) -> InitializeResult;
-}
-
-//#[tower_lsp_server::async_trait]
 impl LanguageServer for Server {
-    async fn initialize(&self, params: InitializeParams) -> jsonrpc::Result<InitializeResult> {
-        return Ok(self.on_initialize(params).await);
+    async fn initialize(&self, _: InitializeParams) -> jsonrpc::Result<InitializeResult> {
+        Window::log(info!("[Server] initializing...")).await;
+        Ok(init::do_initialize())
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        window_log_info!("[Server] initialized.");
+        Window::log(info!("[Server] initialized.")).await;
     }
 
     async fn shutdown(&self) -> jsonrpc::Result<()> {
-        window_log_info!("[Server] shutdown :)");
+        Window::log(info!("[Server] shutdown :)")).await;
         Ok(())
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        self.workspace.on_did_open(&params).await;
+        let uri = params.text_document.uri;
+        let version = params.text_document.version;
+        Window::log(info!(format!("on_did_open: {:?}", uri.to_string()))).await;
+        Window::log(info!(format!("document version: {:?}", version))).await;
+        self.documents
+            .insert(
+                uri.to_string(),
+                Arc::new(RwLock::new(Document::open(
+                    &uri,
+                    params.text_document.text.as_str(),
+                    version,
+                ))),
+            )
+            .await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        self.workspace.on_did_change(&params).await;
+        let uri = params.text_document.uri;
+        let version = params.text_document.version;
+        Window::log(info!(format!("on_did_change: {}", uri.to_string()))).await;
+        let Some(document) = self.documents.get(&uri.to_string()).await else {
+            return;
+        };
+        let mut guard = document.write().await;
+        for change in &params.content_changes {
+            guard.apply_change(version, change);
+        }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        let uri = &params.text_document.uri;
-        window_log_info!(format!("did_close: {:?}", uri.to_string()));
+        let uri = params.text_document.uri;
+        Window::log(info!(format!("did_close: {:?}", uri.to_string()))).await;
+        self.documents.invalidate(&uri.to_string()).await;
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
-        self.workspace.on_did_change_watched_files(params).await;
+        let DidChangeWatchedFilesParams { changes } = params;
+        for change in changes {
+            if change.typ == FileChangeType::DELETED {
+                Window::log(info!(format!(
+                    "did change(delete) file: {}",
+                    change.uri.to_string()
+                )))
+                .await;
+                self.documents.invalidate(&change.uri.to_string()).await;
+            }
+        }
     }
 
     async fn did_delete_files(&self, params: DeleteFilesParams) {
-        self.workspace.on_did_delete_files(params).await;
+        for file in &params.files {
+            let Ok(uri) = Uri::from_str(&file.uri) else {
+                Window::log(warning!(format!("invalid file uri: {}", file.uri))).await;
+                continue;
+            };
+            Window::log(info!(format!("did delete file: {}", uri.to_string()))).await;
+            self.documents.invalidate(&uri.to_string()).await;
+        }
     }
 
     // LSP request/response
@@ -83,109 +141,90 @@ impl LanguageServer for Server {
         &self,
         params: DocumentDiagnosticParams,
     ) -> jsonrpc::Result<DocumentDiagnosticReportResult> {
-        self.workspace.on_diagnostic(params).await
+        let uri = params.text_document.uri.clone();
+        self.with_document(&uri, async move |document| {
+            document.on_diagnostic(params).await
+        })
+        .await
     }
 
     async fn semantic_tokens_full(
         &self,
         params: SemanticTokensParams,
     ) -> jsonrpc::Result<Option<SemanticTokensResult>> {
-        self.workspace.on_semantic_tokens_full(params).await
+        let uri = params.text_document.uri.clone();
+        self.with_document(&uri, async move |document| {
+            document.on_semantic_tokens_full(params).await
+        })
+        .await
     }
 
     async fn hover(&self, params: HoverParams) -> jsonrpc::Result<Option<Hover>> {
-        self.workspace.on_hover(params).await
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        self.with_document(&uri, async move |document| document.on_hover(params).await)
+            .await
     }
 
     async fn completion(
         &self,
         params: CompletionParams,
     ) -> jsonrpc::Result<Option<CompletionResponse>> {
-        self.workspace.on_completion(params).await
+        let uri = params.text_document_position.text_document.uri.clone();
+        self.with_document(&uri, async move |document| {
+            document.on_completion(params).await
+        })
+        .await
     }
 
     async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
     ) -> jsonrpc::Result<Option<GotoDefinitionResponse>> {
-        self.workspace.on_goto_definition(params).await
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        self.with_document(&uri, async move |document| {
+            document.on_goto_definition(params).await
+        })
+        .await
     }
 
     async fn formatting(
         &self,
         params: DocumentFormattingParams,
     ) -> jsonrpc::Result<Option<Vec<TextEdit>>> {
-        self.workspace.on_formatting(params).await
+        let uri = params.text_document.uri.clone();
+        self.with_document(&uri, async move |document| {
+            document.on_formatting(params).await
+        })
+        .await
     }
 
     async fn folding_range(
         &self,
         params: FoldingRangeParams,
     ) -> jsonrpc::Result<Option<Vec<FoldingRange>>> {
-        self.workspace.on_folding_range(params).await
+        let uri = params.text_document.uri.clone();
+        self.with_document(&uri, async move |document| {
+            document.on_folding_range(params).await
+        })
+        .await
     }
 
     async fn code_action(
         &self,
         params: CodeActionParams,
     ) -> jsonrpc::Result<Option<Vec<CodeActionOrCommand>>> {
-        self.workspace.on_code_action(params).await
+        let uri = params.text_document.uri.clone();
+        self.with_document(&uri, async move |document| {
+            document.on_code_action(params).await
+        })
+        .await
     }
-}
-
-// LSP features
-pub trait ActionFeature {
-    async fn on_code_action(
-        &self,
-        params: CodeActionParams,
-    ) -> jsonrpc::Result<Option<Vec<CodeActionOrCommand>>>;
-}
-
-pub trait CompletionFeature {
-    async fn on_completion(
-        &self,
-        params: CompletionParams,
-    ) -> jsonrpc::Result<Option<CompletionResponse>>;
-
-    fn list_macro_definitions(&self) -> Vec<CompletionItem>;
-}
-
-pub trait DiagnosticFeature {
-    async fn on_diagnostic(
-        &self,
-        params: DocumentDiagnosticParams,
-    ) -> jsonrpc::Result<DocumentDiagnosticReportResult>;
-}
-
-pub trait FoldingFeature {
-    async fn on_folding_range(
-        &self,
-        params: FoldingRangeParams,
-    ) -> jsonrpc::Result<Option<Vec<FoldingRange>>>;
-}
-
-pub trait FormatFeature {
-    async fn on_formatting(
-        &self,
-        params: DocumentFormattingParams,
-    ) -> jsonrpc::Result<Option<Vec<TextEdit>>>;
-}
-
-pub trait GotoFeature {
-    async fn on_goto_definition(
-        &self,
-        params: GotoDefinitionParams,
-    ) -> jsonrpc::Result<Option<GotoDefinitionResponse>>;
-}
-
-pub trait HoverFeature {
-    //fn on_node(&self, position: Position) -> Option<Node<'_>>;
-    async fn on_hover(&self, params: HoverParams) -> jsonrpc::Result<Option<Hover>>;
-}
-
-pub trait SemanticTokenFeature {
-    async fn on_semantic_tokens_full(
-        &self,
-        params: SemanticTokensParams,
-    ) -> jsonrpc::Result<Option<SemanticTokensResult>>;
 }
